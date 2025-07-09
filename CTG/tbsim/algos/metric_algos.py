@@ -93,7 +93,7 @@ class EBMMetric(pl.LightningModule):
         metrics = self._compute_metrics(pout, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def validation_epoch_end(self, outputs) -> None:
+    def on_validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -289,7 +289,7 @@ class OccupancyMetric(pl.LightningModule):
         metrics = self._compute_metrics(pout, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def validation_epoch_end(self, outputs) -> None:
+    def on_validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
