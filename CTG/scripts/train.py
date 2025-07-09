@@ -3,6 +3,11 @@ import sys
 import os
 import socket
 
+import sys
+
+if not hasattr(sys.stderr, "isatty"):
+    sys.stderr.isatty = lambda: False
+
 import wandb
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
@@ -184,28 +189,29 @@ def main(cfg, auto_remove_exp_dir=False, debug=False):
         print("WARNING: not logging training stats")
 
     # Train
-    # Set accelerator and devices for PL >=1.7
-    if cfg.devices.num_gpus > 0:
-        accelerator = "gpu"
-        devices = cfg.devices.num_gpus
-    else:
-        accelerator = "cpu"
-        devices = 1
-
     trainer_kwargs = dict(
         default_root_dir=root_dir,
+        # checkpointing
         enable_checkpointing=cfg.train.save.enabled,
+        # logging
         logger=logger,
+        # flush_logs_every_n_steps=cfg.train.logging.flush_every_n_steps,
         log_every_n_steps=cfg.train.logging.log_every_n_steps,
+        # training
         max_steps=cfg.train.training.num_steps,
+        # validation
         val_check_interval=cfg.train.validation.every_n_steps,
         limit_val_batches=cfg.train.validation.num_steps_per_epoch,
+        # all callbacks
         callbacks=train_callbacks,
-        accelerator=accelerator,
-        devices=devices,
+        # device & distributed training setup
+        accelerator="gpu" if cfg.devices.num_gpus > 0 else "cpu",
+        devices=cfg.devices.num_gpus if cfg.devices.num_gpus > 0 else 1,
+        # setting for overfit debugging
         # limit_val_batches=0,
         # overfit_batches=2
     )
+    # Only set strategy if it is a valid string
     if cfg.train.parallel_strategy:
         trainer_kwargs["strategy"] = cfg.train.parallel_strategy
     trainer = pl.Trainer(**trainer_kwargs)
