@@ -82,7 +82,7 @@ class MATrafficModel(pl.LightningModule):
         metrics = self.model.compute_metrics(pout, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -237,7 +237,7 @@ class MAGANTrafficModel(MATrafficModel):
         metrics = self.model.compute_metrics(pout, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -407,7 +407,7 @@ class HierarchicalAgentAwareModel(pl.LightningModule):
 
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)

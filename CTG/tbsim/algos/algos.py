@@ -155,7 +155,7 @@ class BehaviorCloning(pl.LightningModule):
         metrics = self._compute_metrics(pout, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -424,7 +424,7 @@ class SpatialPlanner(pl.LightningModule):
         metrics = self.compute_metrics(pout, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -557,7 +557,7 @@ class VAETrafficModel(pl.LightningModule):
         metrics = self._compute_metrics(pout, samples, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -676,7 +676,7 @@ class DiscreteVAETrafficModel(pl.LightningModule):
         metrics = self._compute_metrics(pout, samples, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -850,7 +850,7 @@ class BehaviorCloningEC(BehaviorCloning):
         metrics = self._compute_metrics(pout, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -1021,7 +1021,7 @@ class GANTrafficModel(pl.LightningModule):
         metrics = self._compute_metrics(pout, batch, samples)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -1127,7 +1127,7 @@ class TransformerTrafficModel(pl.LightningModule):
         metrics = self._compute_metrics(pout["predictions"], batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -1275,7 +1275,7 @@ class TransformerGANTrafficModel(pl.LightningModule):
         metrics = self._compute_metrics(pout, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -1373,7 +1373,7 @@ class TreeVAETrafficModel(pl.LightningModule):
         metrics = self._compute_metrics(pout, samples, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -1524,7 +1524,7 @@ class SceneTreeTrafficModel(pl.LightningModule):
         metrics = self._compute_metrics(pout, samples, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -1984,7 +1984,7 @@ class DiffuserTrafficModel(pl.LightningModule):
         return return_dict
 
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -2235,7 +2235,7 @@ class STRIVETrafficModel(pl.LightningModule):
         metrics = self._compute_metrics(pout, samples, batch)
         return {"losses": losses, "metrics": metrics}
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)
@@ -2679,7 +2679,7 @@ class SceneDiffuserTrafficModel(pl.LightningModule):
         return return_dict
 
 
-    def on_validation_epoch_end(self, outputs) -> None:
+    def validation_epoch_end(self, outputs) -> None:
         for k in outputs[0]["losses"]:
             m = torch.stack([o["losses"][k] for o in outputs]).mean()
             self.log("val/losses_" + k, m)

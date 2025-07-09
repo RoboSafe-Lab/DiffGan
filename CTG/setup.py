@@ -17,7 +17,7 @@ setup(
     install_requires=[
         "l5kit==1.5.0",
         "numpy>=1.19.0,<1.20.0",  # need to manually update numpy version to (1.21.4) due to conflict with l5kit's requirement
-        "pytorch-lightning>=1.8.0,<1.9.0",
+        "pytorch-lightning==1.9.4",
         "wandb",
         "torch==1.11",
         "torchvision==0.12.0",
