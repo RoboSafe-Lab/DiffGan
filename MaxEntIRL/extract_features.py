@@ -289,78 +289,166 @@ def generate_rollouts_from_specific_frame(env, policy, policy_model, scene_idx, 
     
     for rollout_idx in range(num_rollouts):
         # Reset environment to this specific frame
-        env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
+        scenes_valid = env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
+        if not scenes_valid[0]:
+            print(f"      Scene {scene_idx} invalid at frame {start_frame} for rollout {rollout_idx}")
+            continue
         
         # Add variation for different rollouts
         if rollout_idx > 0:
-            np.random.seed(42 + rollout_idx + start_frame)  # Include frame in seed
+            np.random.seed(42 + rollout_idx + start_frame)
             torch.manual_seed(42 + rollout_idx + start_frame)
         
         # Generate single rollout from this frame
         rollout_data = generate_single_rollout_from_frame(
-            env, policy, policy_model, horizon, rollout_idx
+            env, policy, policy_model, scene_idx, start_frame, horizon, rollout_idx
         )
         
         if rollout_data is not None:
             rollouts.append(rollout_data)
             
             # Extract ground truth from first rollout (should be same for all)
-            if ground_truth is None and rollout_data.get('ground_truth') is not None:
-                ground_truth = rollout_data['ground_truth']
-                print(f"    Extracted GT shape: {ground_truth.shape if hasattr(ground_truth, 'shape') else type(ground_truth)}")
+            if ground_truth is None and rollout_data.get('buffer') is not None:
+                try:
+                    buffer = rollout_data['buffer']
+                    if isinstance(buffer, dict) and 'gt_future_positions' in buffer:
+                        ground_truth = buffer['gt_future_positions']
+                        if ground_truth is not None:
+                            print(f"    Extracted GT shape: {ground_truth.shape if hasattr(ground_truth, 'shape') else type(ground_truth)}")
+                except Exception as gt_e:
+                    print(f"    Error extracting ground truth: {gt_e}")
+        else:
+            print(f"      Failed to generate rollout {rollout_idx}")
     
-    
+    print(f"    Generated {len(rollouts)} valid rollouts out of {num_rollouts} attempts")
     return rollouts, ground_truth
 
-def generate_single_rollout_from_frame(env, policy, policy_model, horizon, rollout_idx):
+def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, start_frame, horizon, rollout_idx):
     """
-    Generate a single rollout starting from current environment state
+    Generate a single rollout starting from current environment state with guidance like scene_editor.py
     """
     try:
         # Use the guided_rollout function from scene_edit_utils
-        from tbsim.utils.scene_edit_utils import guided_rollout
+        from tbsim.utils.scene_edit_utils import guided_rollout, compute_heuristic_guidance, merge_guidance_configs
+        from tbsim.policies.wrappers import RolloutWrapper
+        import tbsim.utils.tensor_utils as TensorUtils
         
+        print(f"      Rollout {rollout_idx}: Starting guided_rollout with horizon={horizon}")
+        
+        # Wrap policy like scene_editor.py does
+        rollout_policy = RolloutWrapper(agents_policy=policy)
+        
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        
+        # Initialize guidance and constraint configs like scene_editor.py (lines 189-235)
+        guidance_config = None
+        constraint_config = None
+        
+        # Get the eval_cfg to determine guidance settings
+        # You'll need to pass this from your main function or get it from env
+        eval_cfg = getattr(env, 'eval_cfg', None)  # Add this to your setup function
+        
+        if eval_cfg is not None:
+            # Determine guidance based on editing source like scene_editor.py
+            use_ui = False
+            heuristic_config = None
+            
+            if hasattr(eval_cfg, 'edits') and hasattr(eval_cfg.edits, 'editing_source'):
+                if "heuristic" in eval_cfg.edits.editing_source:
+                    # Use heuristic config
+                    if eval_cfg.edits.heuristic_config is not None:
+                        heuristic_config = eval_cfg.edits.heuristic_config
+                    else:
+                        heuristic_config = []
+                
+                # Getting edits from either config file or heuristics like scene_editor.py lines 189-235
+                if "config" in eval_cfg.edits.editing_source:
+                    guidance_config = eval_cfg.edits.guidance_config
+                    constraint_config = eval_cfg.edits.constraint_config  
+                
+                if "heuristic" in eval_cfg.edits.editing_source and heuristic_config is not None:
+                    # Get observation for heuristic guidance computation
+                    ex_obs = env.get_observation()
+                    obs_to_torch = eval_cfg.eval_class not in ["GroundTruth", "ReplayAction"]
+                    
+                    if obs_to_torch:
+                        ex_obs = TensorUtils.to_torch(ex_obs, device=device, ignore_if_unspecified=True)
+                    
+                    # Compute heuristic guidance like scene_editor.py lines 201-209
+                    heuristic_guidance_cfg = compute_heuristic_guidance(
+                        heuristic_config,
+                        env,
+                        [scene_idx],  # Single scene
+                        [start_frame],  # Single start frame
+                        example_batch=ex_obs['agents']
+                    )
+                    
+                    # Check if heuristic determined valid guidance (lines 211-226)
+                    if len(heuristic_config) > 0:
+                        valid_scene_inds = []
+                        for sci, sc_cfg in enumerate(heuristic_guidance_cfg):
+                            if len(sc_cfg) > 0:
+                                valid_scene_inds.append(sci)
+                        
+                        if len(valid_scene_inds) == 0:
+                            print(f"      No valid heuristic configs for scene {scene_idx}, using no guidance")
+                            heuristic_guidance_cfg = [[]]
+                        else:
+                            heuristic_guidance_cfg = [heuristic_guidance_cfg[vi] for vi in valid_scene_inds]
+                    
+                    # Merge guidance configs like scene_editor.py line 230
+                    guidance_config = merge_guidance_configs(guidance_config, heuristic_guidance_cfg)
+
+        print(f"      Rollout {rollout_idx}: guidance_config type: {type(guidance_config)}, length: {len(guidance_config) if guidance_config else 'None'}")
+        print(f"      Rollout {rollout_idx}: constraint_config type: {type(constraint_config)}, length: {len(constraint_config) if constraint_config else 'None'}")
+        # Call guided_rollout exactly like scene_editor.py (lines 269-280)
         stats, info, renderings = guided_rollout(
             env=env,
-            policy=policy,
+            policy=rollout_policy,
             policy_model=policy_model,
-            n_step_action=5,
-            guidance_config=None,  # No guidance for base rollouts
-            constraint_config=None,
+            n_step_action=5,  # You may want to get this from eval_cfg.n_step_action
+            guidance_config=guidance_config,  # Pass computed guidance
+            constraint_config=constraint_config,  # Pass computed constraints
             render=False,
-            scene_indices=None,  # Already set by reset
-            device="cuda" if torch.cuda.is_available() else "cpu",
-            obs_to_torch=True,
+            scene_indices=[scene_idx],
+            device=device,
+            obs_to_torch=True,  # You may want to get this from eval_cfg
             horizon=horizon,
-            start_frames=None,  # Already set by reset
-            eval_class='Diffuser',
-            apply_guidance=False,
-            apply_constraints=False,
+            start_frames=[start_frame],
+            eval_class='Diffuser',  # You may want to get this from eval_cfg.eval_class
         )
         
-        # Extract ground truth from the buffer
-        ground_truth = None
-        if 'buffer' in info and len(info['buffer']) > 0:
-            # The buffer contains ground truth trajectories
-            buffer = info['buffer'][0]  # First scene's buffer
-            
-            # Look for ground truth keys in the buffer
-            gt_keys = ['target_positions', 'gt_future_positions', 'centroid']
-            for key in gt_keys:
-                if key in buffer:
-                    ground_truth = buffer[key]
-                    break
+        # Check if info is None before accessing it
+        if info is None:
+            print(f"      Rollout {rollout_idx}: WARNING - info is None!")
+            return None
+        
+        print(f"      Rollout {rollout_idx}: guided_rollout completed successfully")
+        
+        # Extract buffer with proper error handling
+        buffer = None
+        if isinstance(info, dict) and 'buffer' in info:
+            if info['buffer'] is not None and len(info['buffer']) > 0:
+                buffer = info['buffer'][0]  # First scene's buffer
+                print(f"      Rollout {rollout_idx}: Successfully extracted buffer")
+                if isinstance(buffer, dict):
+                    print(f"        buffer keys: {list(buffer.keys())}")
+            else:
+                print(f"      Rollout {rollout_idx}: Buffer is empty or None")
+        else:
+            print(f"      Rollout {rollout_idx}: No buffer key in info")
         
         return {
             'rollout_idx': rollout_idx,
             'stats': stats,
             'info': info,
-            'buffer': info.get('buffer', None),
-            'ground_truth': ground_truth  # Add extracted GT
+            'buffer': buffer,
         }
         
     except Exception as e:
         print(f"      Error in rollout {rollout_idx}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def process_frame_trajectories(scene_idx, frame_number, horizon, rollout_trajectories, ground_truth):
@@ -519,7 +607,6 @@ def setup_from_scene_editor_config(eval_cfg):
     if eval_cfg.env == "nusc":
         set_global_trajdata_batch_env("nusc_trainval")
     elif eval_cfg.env == "trajdata":
-        # assumes all used trajdata datasets use share same map layers
         set_global_trajdata_batch_env(eval_cfg.trajdata_source_test[0])
     
     # Set random seeds for reproducibility
@@ -539,6 +626,21 @@ def setup_from_scene_editor_config(eval_cfg):
     # Set global trajdata batch raster config
     set_global_trajdata_batch_raster_cfg(exp_config.env.rasterizer)
     
+    # Extract policy_model
+    policy_model = None
+    print('policy', policy)
+    if hasattr(policy, 'model'):
+        policy_model = policy.model
+    
+    # Set evaluation time sampling/optimization parameters - like scene_editor.py
+    if eval_cfg.apply_guidance:
+        if eval_cfg.eval_class in ['SceneDiffuser', 'Diffuser', 'TrafficSim', 'BC', 'HierarchicalSampleNew']:
+            if policy_model is not None:
+                policy_model.set_guidance_optimization_params(eval_cfg.guidance_optimization_params)
+        if eval_cfg.eval_class in ['SceneDiffuser', 'Diffuser']:
+            if policy_model is not None:
+                policy_model.set_diffusion_specific_params(eval_cfg.diffusion_specific_params)
+    
     # Create environment
     if eval_cfg.env == "nusc":
         env_builder = EnvNuscBuilder(eval_cfg, exp_config, device)
@@ -551,9 +653,7 @@ def setup_from_scene_editor_config(eval_cfg):
     
     # Store exp_config in env for access to algorithm parameters
     env.exp_config = exp_config
-    
-    # Get the underlying policy model
-    policy_model = policy.policy if hasattr(policy, 'policy') else policy
+    env.eval_cfg = eval_cfg
     
     return env, policy, policy_model
 
@@ -589,6 +689,15 @@ if __name__ == "__main__":
     parser.add_argument("--num_sim_per_scene", type=int, default=default_config.num_sim_per_scene,
                        help=f"Number of simulations per scene (default: {default_config.num_sim_per_scene})")
     
+    parser.add_argument(
+        "--editing_source",
+        type=str,
+        choices=["config", "heuristic", "none"],
+        default=["config", "heuristic"],
+        nargs="+",
+        help="Which edits to use. config is directly from the configuration file. heuristic will \
+              set edits automatically based on heuristics. If none, does not use edits."
+    )
 
     args = parser.parse_args()    
     cfg = SceneEditingConfig(registered_name=args.registered_name)
@@ -610,6 +719,11 @@ if __name__ == "__main__":
     if args.env is not None:
         cfg.env = args.env
     
+    if args.editing_source is not None:
+        cfg.edits.editing_source = args.editing_source
+    if not isinstance(cfg.edits.editing_source, list):
+        cfg.edits.editing_source = [cfg.edits.editing_source]
+        
     # Copy env-specific config to global level (like scene_editor.py does)
     for k in cfg[cfg.env]:
         cfg[k] = cfg[cfg.env][k]
