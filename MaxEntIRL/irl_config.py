@@ -14,18 +14,17 @@ class FeatureExtractionConfig:
     output_dir: str = "irl_features_output"
     
     # Scene selection
-    scene_indices: List[int] = field(default_factory=lambda: [0, 10, 20])
+    scene_indices: List[int] = field(default_factory=lambda: [0])
     start_frames: List[int] = field(default_factory=list)
     num_scenes_to_evaluate: int = 50
     num_scenes_per_batch: int = 1
     num_sim_per_scene: int = 1
     
     # Feature extraction parameters
-    frame_step: int = 5
-    min_horizon: int = 20
-    num_rollouts: int = 10
-    horizon: int = 50
-    
+    frame_step: int = 20 # Step size between frames for generating rollouts
+    num_rollouts: int = 8
+    horizon: int = 50 # Fixed horizon for generating rollouts
+
     # Environment settings
     env: str = "trajdata"
     eval_class: str = "Diffuser"
