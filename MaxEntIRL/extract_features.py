@@ -10,100 +10,6 @@ from tbsim.policies.wrappers import RolloutWrapper
 from tbsim.utils.batch_utils import set_global_batch_type
 from tbsim.utils.trajdata_utils import set_global_trajdata_batch_env, set_global_trajdata_batch_raster_cfg
 
-def compute_irl_features(trajectories, dt=0.1):
-    """
-    Compute IRL features for trajectories
-    Args:
-        trajectories: numpy array of shape [num_agents, time_steps, 2] (x, y positions)
-        dt: time step in seconds
-    Returns:
-        dict with features: velocity, a_long, jerk_long, thw_front, thw_rear, a_lateral
-    """
-    num_agents, num_steps, _ = trajectories.shape
-    features = {}
-    
-    # Initialize feature arrays
-    features['velocity'] = np.zeros((num_agents, num_steps-1))
-    features['a_long'] = np.zeros((num_agents, num_steps-2))
-    features['jerk_long'] = np.zeros((num_agents, num_steps-3))
-    features['a_lateral'] = np.zeros((num_agents, num_steps-2))
-    features['thw_front'] = np.zeros((num_agents, num_steps-1))
-    features['thw_rear'] = np.zeros((num_agents, num_steps-1))
-    
-    for agent_id in range(num_agents):
-        traj = trajectories[agent_id]  # [time_steps, 2]
-        
-        # Compute velocity (magnitude of velocity vector)
-        vel_vectors = np.diff(traj, axis=0) / dt  # [time_steps-1, 2]
-        velocities = np.linalg.norm(vel_vectors, axis=1)  # [time_steps-1]
-        features['velocity'][agent_id] = velocities
-        
-        # Compute heading angles from velocity vectors
-        headings = np.arctan2(vel_vectors[:, 1], vel_vectors[:, 0])  # [time_steps-1]
-        
-        # Compute longitudinal acceleration
-        if len(velocities) > 1:
-            a_long = np.diff(velocities) / dt  # [time_steps-2]
-            features['a_long'][agent_id] = a_long
-            
-            # Compute longitudinal jerk
-            if len(a_long) > 1:
-                jerk_long = np.diff(a_long) / dt  # [time_steps-3]
-                features['jerk_long'][agent_id] = jerk_long
-        
-        # Compute lateral acceleration (change in heading * velocity)
-        if len(headings) > 1 and len(velocities) > 1:
-            heading_rates = np.diff(headings) / dt  # [time_steps-2]
-            # Use velocity at midpoint for lateral acceleration calculation
-            mid_velocities = (velocities[:-1] + velocities[1:]) / 2  # [time_steps-2]
-            a_lateral = heading_rates * mid_velocities
-            features['a_lateral'][agent_id] = a_lateral
-        
-        # Compute Time Headway (THW) - distance to front/rear vehicles divided by velocity
-        for t in range(len(velocities)):
-            if velocities[t] > 0.1:  # Only compute if vehicle is moving
-                # Find distances to other agents at this timestep
-                current_pos = traj[t]
-                other_positions = trajectories[:, t, :]  # [num_agents, 2]
-                
-                # Calculate distances to all other agents
-                distances = np.linalg.norm(other_positions - current_pos[None, :], axis=1)
-                distances[agent_id] = np.inf  # Ignore self
-                
-                # Determine which agents are in front/behind based on heading
-                if t < len(headings):
-                    heading = headings[t]
-                    heading_vector = np.array([np.cos(heading), np.sin(heading)])
-                    
-                    # Vector from current agent to other agents
-                    relative_vectors = other_positions - current_pos[None, :]
-                    
-                    # Dot product to determine front/rear (positive = front, negative = rear)
-                    along_heading = np.dot(relative_vectors, heading_vector)
-                    
-                    # Find closest agent in front and behind
-                    front_agents = (along_heading > 0) & (distances < 50.0)  # Within 50m
-                    rear_agents = (along_heading < 0) & (distances < 50.0)   # Within 50m
-                    
-                    if np.any(front_agents):
-                        closest_front_dist = np.min(distances[front_agents])
-                        features['thw_front'][agent_id, t] = closest_front_dist / velocities[t]
-                    else:
-                        features['thw_front'][agent_id, t] = 10.0  # Large value if no front vehicle
-                    
-                    if np.any(rear_agents):
-                        closest_rear_dist = np.min(distances[rear_agents])
-                        features['thw_rear'][agent_id, t] = closest_rear_dist / velocities[t]
-                    else:
-                        features['thw_rear'][agent_id, t] = 10.0  # Large value if no rear vehicle
-                else:
-                    features['thw_front'][agent_id, t] = 10.0
-                    features['thw_rear'][agent_id, t] = 10.0
-            else:
-                features['thw_front'][agent_id, t] = 10.0
-                features['thw_rear'][agent_id, t] = 10.0
-    
-    return features
 
 def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indices, start_frames, output_dir, 
                                        frame_step=20, horizon=50, num_sim_per_scene=1):
@@ -318,7 +224,8 @@ def generate_rollouts_from_specific_frame(env, policy, policy_model, scene_idx, 
         else:
             print(f"      Failed to generate rollout {rollout_idx}")
     
-    print(f"    Generated {len(rollouts)} valid rollouts out of {num_rollouts} attempts")
+    print(f"    Generated {len(rollouts)} valid rollouts out of {num_rollouts} attempts")    
+       
     return rollouts, ground_truth
 
 def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon):
@@ -449,7 +356,7 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
                         example_batch=ex_obs['agents']
                     )
                     
-                    # Check if heuristic determined valid guidance (lines 211-226)
+                    # Check if heuristic determined valid guidance
                     if len(heuristic_config) > 0:
                         valid_scene_inds = []
                         for sci, sc_cfg in enumerate(heuristic_guidance_cfg):
@@ -497,8 +404,6 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
             if info['buffer'] is not None and len(info['buffer']) > 0:
                 buffer = info['buffer'][0]  # First scene's buffer
                 print(f"      Rollout {rollout_idx}: Successfully extracted buffer")
-                if isinstance(buffer, dict):
-                    print(f"        buffer keys: {list(buffer.keys())}")
             else:
                 print(f"      Rollout {rollout_idx}: Buffer is empty or None")
         else:
@@ -517,7 +422,7 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
         traceback.print_exc()
         return None
 
-def process_frame_trajectories(scene_idx, frame_number, horizon, rollout_trajectories, ground_truth):
+def process_frame_trajectories(scene_idx, frame_number, horizon, rollout_trajectories, ground_truth, debug=False):
     """
     Process trajectories from a specific frame and compute features with agent matching
     """
@@ -532,23 +437,35 @@ def process_frame_trajectories(scene_idx, frame_number, horizon, rollout_traject
     for rollout_data in rollout_trajectories:
         agent_trajectories = rollout_data.get("agent_trajectories", {})
         if agent_trajectories:
-            agent_features = compute_irl_features_for_agent_dict(agent_trajectories, dt=0.1)
+            agent_features = compute_irl_features(agent_trajectories, dt=0.1)
             rollout_features_list.append(agent_features)
     
     # Compute features for ground truth (per agent)
-    gt_features = compute_irl_features_for_agent_dict(ground_truth, dt=0.1)
+    gt_features = compute_irl_features(ground_truth, dt=0.1)
     
     # Compute feature expectations across rollouts for each agent
     agent_feature_expectations = compute_agent_feature_expectations(rollout_features_list)
-    
-    # Compute feature comparison for each agent
-    agent_feature_comparisons = {}
-    for agent_id in gt_features:
-        if agent_id in agent_feature_expectations:
-            agent_feature_comparisons[agent_id] = compare_agent_features(
-                agent_feature_expectations[agent_id], gt_features[agent_id]
+     
+    # Add visualization at the end if debug is enabled
+    if debug:
+        from visualize_rollout_gt import visualize_guided_rollout_with_gt
+        plot_output_dir = os.path.join("irl_features_output", "visualization")
+        
+        try:
+            fig, ax = visualize_guided_rollout_with_gt(
+                rollout_trajectories=rollout_trajectories,
+                ground_truth=ground_truth,
+                scene_idx=scene_idx,
+                start_frame=frame_number,
+                scene_name=f"Scene_{scene_idx}",
+                output_dir=plot_output_dir
             )
-    
+
+            if fig is not None:
+                plt.close(fig)  # Free memory
+        except Exception as e:
+            print(f"    Visualization warning: {e}") 
+       
     return {
         'scene_idx': scene_idx,
         'frame_number': frame_number,
@@ -557,8 +474,7 @@ def process_frame_trajectories(scene_idx, frame_number, horizon, rollout_traject
         'agent_rollout_features': rollout_features_list,
         'agent_feature_expectations': agent_feature_expectations,
         'agent_ground_truth_features': gt_features,
-        'agent_feature_comparisons': agent_feature_comparisons,
-        'ground_truth_trajectories': ground_truth  # Now a dict with agent_id keys
+        'ground_truth_trajectories': ground_truth  # a dict with agent_id keys
     }
 
 def compute_agent_feature_expectations(agent_feature_list):
@@ -598,36 +514,6 @@ def compute_agent_feature_expectations(agent_feature_list):
     
     return agent_expectations
 
-def compare_agent_features(rollout_features, gt_features):
-    """
-    Compare rollout features with ground truth features for a single agent
-    """
-    comparison = {}
-    
-    for feature_name in rollout_features.keys():
-        if feature_name.endswith('_std'):
-            continue  # Skip std features
-            
-        if feature_name in gt_features:
-            rollout_vals = rollout_features[feature_name]
-            gt_vals = gt_features[feature_name]
-            
-            # Ensure compatible lengths
-            min_length = min(len(rollout_vals), len(gt_vals))
-            rollout_crop = rollout_vals[:min_length]
-            gt_crop = gt_vals[:min_length]
-            
-            # Compute comparison metrics
-            comparison[feature_name] = {
-                'mse': np.mean((rollout_crop - gt_crop) ** 2),
-                'mae': np.mean(np.abs(rollout_crop - gt_crop)),
-                'rollout_mean': np.mean(rollout_crop),
-                'rollout_std': np.std(rollout_crop),
-                'gt_mean': np.mean(gt_crop),
-                'gt_std': np.std(gt_crop)
-            }
-    
-    return comparison
 
 def extract_trajectories_from_rollouts(rollouts):
     """
@@ -654,6 +540,8 @@ def extract_trajectories_from_rollouts(rollouts):
                     agent_ids = track_ids.detach().numpy()
                 else:
                     agent_ids = np.array(track_ids)
+                    
+            unique_agent_ids = agent_ids[:, 0]  # [num_agents, timesteps], get first column for unique IDs
             
             # Get centroid data
             if 'centroid' in buffer and agent_ids is not None:
@@ -666,14 +554,15 @@ def extract_trajectories_from_rollouts(rollouts):
                     centroids = np.array(centroids)
                 
                 # Create dictionary with agent_id as key
-                for i, agent_id in enumerate(agent_ids):
+                unique_agent_ids = unique_agent_ids.tolist()
+                for i, unique_agent_id in enumerate(unique_agent_ids):
                     if i < len(centroids):
-                        agent_trajectories[agent_id] = centroids[i]  # [time_steps, 2]
+                        agent_trajectories[unique_agent_id] = centroids[i]  # [time_steps, 2]
             
             if agent_trajectories:
                 extracted_trajectories.append({
                     "agent_trajectories": agent_trajectories,
-                    "agent_ids": agent_ids,
+                    "agent_ids": unique_agent_ids,
                 })
     
     return extracted_trajectories
@@ -741,7 +630,7 @@ def setup_from_scene_editor_config(eval_cfg):
     
     return env, policy, policy_model
 
-def compute_irl_features_for_agent_dict(agent_trajectories_dict, dt=0.1):
+def compute_irl_features(agent_trajectories_dict, dt=0.1):
     """
     Compute IRL features for agent dictionary format
     Args:
