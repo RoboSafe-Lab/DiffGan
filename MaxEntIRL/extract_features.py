@@ -12,7 +12,7 @@ from tbsim.utils.trajdata_utils import set_global_trajdata_batch_env, set_global
 
 
 def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indices, start_frames, output_dir, 
-                                       frame_step=20, horizon=50, num_sim_per_scene=1):
+                                        horizon=50, num_sim_per_scene=1, num_rollouts=10, debug=False):
     """
     Extract IRL features by generating rollouts from ALL frames, not just start frame
     Args:
@@ -22,9 +22,10 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
         scene_indices: List of scene indices
         start_frames: List of starting frame indices (can be None for automatic determination)
         output_dir: Output directory
-        frame_step: Step size between frames (e.g., every 5 frames)
         horizon:  fixed horizon to generate rollout
         num_sim_per_scene: Number of simulations per scene
+        num_rollouts: Number of rollouts to generate per frame
+        debug: Enable debug mode for plotting rollouts and ground truth
     """
     print("Extracting IRL features from ALL frames...")
     
@@ -75,17 +76,18 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
                 # Fallback if scene info not available
                 print(f"Scene {scene_idx}: using fallback start frame")
                 start_frame_index.append([horizon])
+                
+        print(f'Automatically determined starting frames: {start_frame_index}')        
     else:
         # Use provided start_frames, but format as nested list for consistency
-        print(f"Using provided start frames")
+        print(f"Using provided start frames: {start_frames}")
         start_frame_index = [[sf] for sf in start_frames]
-    
-    print(f'Automatically determined starting frames: {start_frame_index}')
-    
+
     # Process each scene with its determined start frames
     for si_idx, scene_idx in enumerate(scene_indices):
         scene_start_frames = start_frame_index[si_idx]
-
+        scene_name = env._current_scenes[0].scene.name 
+        
         for start_frame in scene_start_frames:
             print(f"\nProcessing scene {scene_idx}, start frame {start_frame}")
             
@@ -93,54 +95,33 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
             scenes_valid = env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
             if not scenes_valid[0]:
                 print(f"Scene {scene_idx} invalid at start frame {start_frame}, skipping...")
+                continue                      
+                       
+            scene_features = []          
+                            
+            # Generate rollouts starting from this specific frame
+            frame_rollouts, frame_gt = generate_rollouts_from_specific_frame(
+                env, policy, policy_model, scene_idx, start_frame, 
+                num_rollouts=num_rollouts, horizon=horizon
+            )
+            
+            if not frame_rollouts or frame_gt is None:
+                print(f"    Warning: No data generated for frame {start_frame}")
                 continue
             
-            # Determine scene length from current start frame
-            remaining_length = get_remaining_scene_length(env, start_frame)
-            max_frame = start_frame + remaining_length - horizon
+            # Extract and process trajectories
+            rollout_trajectories = extract_trajectories_from_rollouts(frame_rollouts)
             
-            if max_frame <= start_frame:
-                print(f"Insufficient remaining length for scene {scene_idx} from frame {start_frame}")
+            if not rollout_trajectories:
+                print(f"    Warning: No rollout trajectories for frame {start_frame}")
                 continue
-                
-            print(f"Scene remaining length: {remaining_length}, processing frames {start_frame} to {max_frame}")
             
-            scene_features = []
+            frame_features_data = process_frame_trajectories(
+                scene_idx, scene_name, start_frame, rollout_trajectories, frame_gt, debug=debug
+            )
             
-            # Generate rollouts from frames within this scene
-            for current_frame in range(start_frame, max_frame, frame_step):
-                remaining_horizon = remaining_length - (current_frame - start_frame)
-                
-                if remaining_horizon < horizon:
-                    print(f"  Skipping frame {current_frame}: insufficient horizon ({remaining_horizon})")
-                    continue
-                    
-                print(f"  Processing frame {current_frame}, horizon: {remaining_horizon}")
-                
-                # Generate rollouts starting from this specific frame
-                frame_rollouts, frame_gt = generate_rollouts_from_specific_frame(
-                    env, policy, policy_model, scene_idx, current_frame, 
-                    num_rollouts=10, horizon=horizon
-                )
-                
-                if not frame_rollouts or frame_gt is None:
-                    print(f"    Warning: No data generated for frame {current_frame}")
-                    continue
-                
-                # Extract and process trajectories
-                rollout_trajectories = extract_trajectories_from_rollouts(frame_rollouts)
-                
-                if not rollout_trajectories:
-                    print(f"    Warning: No rollout trajectories for frame {current_frame}")
-                    continue
-                
-                frame_features_data = process_frame_trajectories(
-                    scene_idx, current_frame, remaining_horizon,
-                    rollout_trajectories, frame_gt
-                )
-                
-                if frame_features_data:
-                    scene_features.append(frame_features_data)
+            if frame_features_data:
+                scene_features.append(frame_features_data)
             
             # Save features for this scene-start_frame combination
             if scene_features:
@@ -161,26 +142,6 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
     
     return all_features
 
-def get_remaining_scene_length(env, start_frame):
-    """
-    Get the remaining length of the scene from the start frame
-    """
-    if hasattr(env, '_current_scenes') and len(env._current_scenes) > 0:
-        current_scene = env._current_scenes[0].scene
-        return current_scene.length_timesteps - start_frame
-    else:
-        # Fallback: estimate by stepping through
-        original_frame = env._frame_index if hasattr(env, '_frame_index') else 0
-        step_count = 0
-        while step_count < 1000:  # Safety limit
-            try:
-                obs, _, done, info = env.step(None)
-                step_count += 1
-                if done:
-                    break
-            except:
-                break
-        return step_count
 
 def generate_rollouts_from_specific_frame(env, policy, policy_model, scene_idx, start_frame, 
                                         num_rollouts=10, horizon=50):
@@ -422,7 +383,7 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
         traceback.print_exc()
         return None
 
-def process_frame_trajectories(scene_idx, frame_number, horizon, rollout_trajectories, ground_truth, debug=False):
+def process_frame_trajectories(scene_idx, scene_name, frame_number, rollout_trajectories, ground_truth, debug=False):
     """
     Process trajectories from a specific frame and compute features with agent matching
     """
@@ -452,24 +413,21 @@ def process_frame_trajectories(scene_idx, frame_number, horizon, rollout_traject
         plot_output_dir = os.path.join("irl_features_output", "visualization")
         
         try:
-            fig, ax = visualize_guided_rollout_with_gt(
+            visualize_guided_rollout_with_gt(
                 rollout_trajectories=rollout_trajectories,
                 ground_truth=ground_truth,
                 scene_idx=scene_idx,
                 start_frame=frame_number,
-                scene_name=f"Scene_{scene_idx}",
+                scene_name=scene_name,
                 output_dir=plot_output_dir
             )
 
-            if fig is not None:
-                plt.close(fig)  # Free memory
         except Exception as e:
             print(f"    Visualization warning: {e}") 
        
     return {
         'scene_idx': scene_idx,
         'frame_number': frame_number,
-        'horizon': horizon,
         'num_rollouts': len(rollout_trajectories),
         'agent_rollout_features': rollout_features_list,
         'agent_feature_expectations': agent_feature_expectations,
@@ -762,13 +720,15 @@ if __name__ == "__main__":
                        help=f"Scene indices (default: {default_config.scene_indices})")
     parser.add_argument("--start_frames", nargs='+', type=int, default=default_config.start_frames,
                        help="Optional start frames")
-    parser.add_argument("--frame_step", type=int, default=default_config.frame_step,
-                       help=f"Step size between frames (default: {default_config.frame_step})")
     parser.add_argument("--horizon", type=int, default=default_config.horizon,
                        help=f"Fixed horizon for rollouts (default: {default_config.horizon})")
     parser.add_argument("--num_sim_per_scene", type=int, default=default_config.num_sim_per_scene,
                        help=f"Number of simulations per scene (default: {default_config.num_sim_per_scene})")
-    
+    parser.add_argument("--num_rollouts", type=int, default=default_config.num_rollouts,
+                       help=f"Number of rollouts (default: {default_config.num_rollouts})")
+    parser.add_argument("--debug", type=bool, default=default_config.debug,
+                       help=f"Debug mode (default: {default_config.debug})")
+
     parser.add_argument(
         "--editing_source",
         type=str,
@@ -825,8 +785,10 @@ if __name__ == "__main__":
         features = extract_irl_features_from_all_frames(
             env, policy, policy_model, 
             args.scene_indices, args.start_frames, 
-            args.output_dir, args.frame_step, args.horizon,
-            args.num_sim_per_scene
+            args.output_dir, args.horizon,
+            args.num_sim_per_scene,
+            args.num_rollouts,
+            args.debug
         )
         
         print("Feature extraction from all frames complete!")

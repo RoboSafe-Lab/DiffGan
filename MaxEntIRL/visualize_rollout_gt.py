@@ -22,26 +22,26 @@ def transform_points_to_raster(points, raster_from_world):
         return np.array([transform_points_to_raster(traj, raster_from_world) for traj in points])
 
 
-def draw_ground_truth_trajectories(ax, ground_truth_data, raster_from_world, current_frame=0):
+def draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, current_frame=0):
     """
     Draw ground truth trajectories on the plot
     
     Args:
         ax: matplotlib axes
-        ground_truth_data: dict with agent_id as key, trajectory as value
+        ground_truth: dict with agent_id as key, trajectory as value
         raster_from_world: transformation matrix from world to raster coordinates
         current_frame: current frame index for highlighting current position
     
     Returns:
         bool: True if any ground truth was drawn
     """
-    if not ground_truth_data:
+    if not ground_truth:
         return False
     
     gt_drawn = False
-    colors = plt.cm.Set1(np.linspace(0, 1, len(ground_truth_data)))
+    colors = plt.cm.Set1(np.linspace(0, 1, len(ground_truth)))
     
-    for i, (agent_id, trajectory) in enumerate(ground_truth_data.items()):
+    for i, (agent_id, trajectory) in enumerate(ground_truth.items()):
         if len(trajectory) == 0:
             continue
             
@@ -143,14 +143,14 @@ def rasterize_rendering():
                                                 cache_location='~/.unified_data_cache')
     return render_rasterizer
 
-def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth_data, scene_idx, 
+def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_idx, 
                                    start_frame, scene_name, output_dir):
     """
     Create visualization with rasterized map background using data from extract_features.py
     
     Args:
         rollout_trajectories: List of rollout data from extract_features.py
-        ground_truth_data: Ground truth trajectories dict from extract_features.py  
+        ground_truth: Ground truth trajectories dict from extract_features.py  
         scene_idx: Scene index
         start_frame: Starting frame
         scene_name: Scene name
@@ -165,8 +165,8 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth_data, sc
         # Calculate center position from ground truth or rollouts
         all_positions = []
         
-        if ground_truth_data:
-            for agent_id, traj in ground_truth_data.items():
+        if ground_truth:
+            for agent_id, traj in ground_truth.items():
                 if len(traj) > 0:
                     traj = np.array(traj)
                     if len(traj.shape) == 2 and traj.shape[1] >= 2:
@@ -190,12 +190,18 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth_data, sc
         ras_pos = np.mean(all_positions, axis=0)[:2]  # Ensure only x,y
         
         # Get rasterized map
-        state_im, raster_from_world = rasterizer.render(
+        render_result = rasterizer.render(
             ras_pos=ras_pos,
             ras_yaw=0,
             scene_name=scene_name
         )
+        print(f"Render result type: {type(render_result)}")
+        if isinstance(render_result, tuple):
+            print(f"Render result length: {len(render_result)}")
+        else:
+            print(f"Render result: {render_result}")
         
+        state_im, raster_from_world = render_result
         # Create figure and display rasterized map
         fig, ax = plt.subplots(figsize=(12, 10))
         ax.imshow(state_im, origin='lower', alpha=0.8)
@@ -203,8 +209,8 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth_data, sc
         gt_drawn = False
         
         # Draw ground truth trajectories
-        if ground_truth_data:
-            gt_drawn = draw_ground_truth_trajectories(ax, ground_truth_data, raster_from_world, 0)
+        if ground_truth:
+            gt_drawn = draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, 0)
         
         # Draw rollout trajectories  
         if rollout_trajectories:
@@ -231,7 +237,7 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth_data, sc
         return None
 
 # Add a convenience function for testing without rasterizer
-def visualize_trajectories_simple(rollout_trajectories, ground_truth_data, scene_idx, 
+def visualize_trajectories_simple(rollout_trajectories, ground_truth, scene_idx, 
                                 start_frame, output_dir):
     """
     Simple visualization without rasterized background for testing
@@ -242,9 +248,9 @@ def visualize_trajectories_simple(rollout_trajectories, ground_truth_data, scene
     fig, ax = plt.subplots(figsize=(12, 10))
     
     # Draw ground truth trajectories
-    if ground_truth_data:
-        gt_colors = plt.cm.Set1(np.linspace(0, 1, len(ground_truth_data)))
-        for i, (agent_id, trajectory) in enumerate(ground_truth_data.items()):
+    if ground_truth:
+        gt_colors = plt.cm.Set1(np.linspace(0, 1, len(ground_truth)))
+        for i, (agent_id, trajectory) in enumerate(ground_truth.items()):
             trajectory = np.array(trajectory)
             if len(trajectory) > 1 and len(trajectory.shape) == 2:
                 ax.plot(trajectory[:, 0], trajectory[:, 1], 
@@ -284,5 +290,24 @@ def visualize_trajectories_simple(rollout_trajectories, ground_truth_data, scene
     print(f"Simple trajectory visualization saved to {output_path}")
     return output_path
 
-
+def get_remaining_scene_length(env, start_frame):
+    """
+    Get the remaining length of the scene from the start frame
+    """
+    if hasattr(env, '_current_scenes') and len(env._current_scenes) > 0:
+        current_scene = env._current_scenes[0].scene
+        return current_scene.length_timesteps - start_frame
+    else:
+        # Fallback: estimate by stepping through
+        original_frame = env._frame_index if hasattr(env, '_frame_index') else 0
+        step_count = 0
+        while step_count < 1000:  # Safety limit
+            try:
+                obs, _, done, info = env.step(None)
+                step_count += 1
+                if done:
+                    break
+            except:
+                break
+        return step_count
 

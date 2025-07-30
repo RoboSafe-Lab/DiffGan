@@ -15,13 +15,14 @@ class FeatureExtractionConfig:
     
     # Scene selection
     scene_indices: List[int] = field(default_factory=lambda: [0])
-    start_frames: List[int] = field(default_factory=list)
+    start_frames: List[int] = field(default_factory=lambda: [31])
     num_scenes_to_evaluate: int = 50
     num_scenes_per_batch: int = 1
     num_sim_per_scene: int = 1
     
+    debug: bool = True  # Debug mode for additional logging
+    
     # Feature extraction parameters
-    frame_step: int = 20 # Step size between frames for generating rollouts
     num_rollouts: int = 8
     horizon: int = 50 # Fixed horizon for generating rollouts
 
@@ -45,8 +46,7 @@ class FeatureExtractionConfig:
     # Random seed
     seed: int = 42
     
-    # Auto-determine start frames like scene_editor
-    auto_determine_start_frames: bool = True
+    # minimum remaining steps for rollouts
     min_remaining_steps: int = 50
     
     def __post_init__(self):
@@ -56,7 +56,7 @@ class FeatureExtractionConfig:
         
         # Set default scenes if none provided
         if not self.scene_indices:
-            self.scene_indices = list(range(3))
+            self.scene_indices = list(range(num_scenes_to_evaluate))
             
         # Ensure output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
