@@ -12,7 +12,8 @@ from tbsim.utils.trajdata_utils import set_global_trajdata_batch_env, set_global
 
 
 def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indices, start_frames, output_dir, 
-                                        horizon=50, num_sim_per_scene=1, num_rollouts=10, debug=False):
+                                        horizon=50, num_sim_per_scene=1, num_rollouts=10, filter_dynamic=False,
+                                        min_velocity_threshold=2.0, debug=False):
     """
     Extract IRL features by generating rollouts from ALL frames, not just start frame
     Args:
@@ -25,6 +26,8 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
         horizon:  fixed horizon to generate rollout
         num_sim_per_scene: Number of simulations per scene
         num_rollouts: Number of rollouts to generate per frame
+        filter_dynamic: Filter for dynamic agents only
+        min_velocity_threshold: Minimum velocity threshold for dynamic agents
         debug: Enable debug mode for plotting rollouts and ground truth
     """
     print("Extracting IRL features from ALL frames...")
@@ -100,24 +103,18 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
             scene_features = []          
                             
             # Generate rollouts starting from this specific frame
-            frame_rollouts, frame_gt = generate_rollouts_from_specific_frame(
+            rollout_trajectories, gt_trajectories = generate_rollouts_from_specific_frame(
                 env, policy, policy_model, scene_idx, start_frame, 
-                num_rollouts=num_rollouts, horizon=horizon
+                num_rollouts=num_rollouts, horizon=horizon, 
+                filter_dynamic=filter_dynamic, min_velocity_threshold=2.0
             )
-            
-            if not frame_rollouts or frame_gt is None:
+
+            if not rollout_trajectories or gt_trajectories is None:
                 print(f"    Warning: No data generated for frame {start_frame}")
                 continue
-            
-            # Extract and process trajectories
-            rollout_trajectories = extract_trajectories_from_rollouts(frame_rollouts)
-            
-            if not rollout_trajectories:
-                print(f"    Warning: No rollout trajectories for frame {start_frame}")
-                continue
-            
+                        
             frame_features_data = process_frame_trajectories(
-                scene_idx, scene_name, start_frame, rollout_trajectories, frame_gt, debug=debug
+                scene_idx, scene_name, start_frame, rollout_trajectories, gt_trajectories, debug=debug
             )
             
             if frame_features_data:
@@ -144,22 +141,27 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
 
 
 def generate_rollouts_from_specific_frame(env, policy, policy_model, scene_idx, start_frame, 
-                                        num_rollouts=10, horizon=50):
+                                        num_rollouts=10, horizon=50, 
+                                        filter_dynamic=False, min_velocity_threshold=2.0):
     """
     Generate multiple rollouts starting from a SPECIFIC frame
     """
+    # Step 1: Extract ground truth trajectory first to identify dynamic agents
+    print(f"    Step 1: Extracting ground truth to identify dynamic agents")
+    ground_truth = extract_ground_truth_trajectory(
+        env, scene_idx, start_frame, horizon, filter_dynamic=filter_dynamic, 
+        min_velocity_threshold=min_velocity_threshold
+    )
+    
+    if ground_truth is None or len(ground_truth) == 0:
+        print(f"    No dynamic agents found in ground truth, skipping rollouts")
+        return None, None
+    
+    dynamic_agent_ids = list(ground_truth.keys())
+    print(f"    Found {len(dynamic_agent_ids)} dynamic agents: {dynamic_agent_ids}")
+    
+    # Step 2: Generate rollouts
     rollouts = []
-
-    # Extract ground truth by stepping through environment without policy
-    print(f"    Extracting ground truth for scene {scene_idx}, frame {start_frame}")
-    ground_truth = extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon)
-    
-    if ground_truth is not None:
-        print(f"    Ground truth extracted successfully for scene {scene_idx}, frame {start_frame}")
-    else:
-        print(f"    Warning: Could not extract ground truth")
-    
-    
     # Generate multiple rollouts from this frame
     print(f"    Generating {num_rollouts} rollouts from frame {start_frame}")
     
@@ -186,76 +188,15 @@ def generate_rollouts_from_specific_frame(env, policy, policy_model, scene_idx, 
             print(f"      Failed to generate rollout {rollout_idx}")
     
     print(f"    Generated {len(rollouts)} valid rollouts out of {num_rollouts} attempts")    
-       
-    return rollouts, ground_truth
+    
+    # Step 3: Extract trajectories from rollouts, but only for the dynamic agents we identified
+    rollout_trajectories = extract_trajectories_from_rollouts(rollouts, dynamic_agent_ids=dynamic_agent_ids)
 
-def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon):
-    """
-    Extract ground truth using dataset's get_states method
-    """
-    try:
-        if not (hasattr(env, '_current_scenes') and len(env._current_scenes) > 0):
-            return None
-        
-        current_scene = env._current_scenes[0]
-        
-        # Get agent names and agent objects
-        if hasattr(current_scene, 'agents'):
-            agents = current_scene.agents
-            agent_names = [agent.name for agent in agents]
-        else:
-            print("      Cannot access agent names")
-            return None
-        
-        gt_trajectories = {}
-        
-        # Extract trajectories for each agent
-        for agent_idx, (agent, agent_name) in enumerate(zip(agents, agent_names)):
-            agent_positions = []
-            
-            for frame_offset in range(horizon):
-                frame_idx = start_frame + frame_offset
-
-                # Check if agent is active in this frame using the agent object
-                if not (agent.first_timestep <= frame_idx < agent.last_timestep):
-                    # Agent is not active in this frame, so we can safely skip it
-                    continue
-                    
-                # Use the dataset's method to get agent states
-                if hasattr(current_scene, 'cache'):
-                    states = current_scene.cache.get_states([agent_name], frame_idx)
-                else:
-                    # Fallback: try dataset directly
-                    states = current_scene.dataset.get_states([agent_name], frame_idx)
-                
-                # Process valid states
-                if states is not None and hasattr(states, '__len__') and len(states) > 0:
-                    state = states[0]
-                    # Handle tensor conversion
-                    if hasattr(state, 'cpu'):
-                        state_np = state.cpu().numpy()
-                    elif hasattr(state, 'detach'):
-                        state_np = state.detach().numpy()
-                    else:
-                        state_np = np.array(state)
-                    
-                    # Extract x, y position
-                    agent_positions.append([float(state_np[0]), float(state_np[1])])
-                else:
-                    # No data returned, skip frame
-                    continue
-
-            # Only include agents with sufficient trajectory data
-            if len(agent_positions) >= 2:
-                gt_trajectories[agent_idx] = np.array(agent_positions)
-            else:
-                print(f"      Agent {agent_name} (ID {agent_idx}): insufficient data ({len(agent_positions)} positions)")
-        
-        return gt_trajectories if gt_trajectories else None
-        
-    except Exception as e:
-        print(f"      Error using dataset get_states: {e}")
-        return None
+    if not rollout_trajectories:
+        print(f"    Warning: No dynamic agent trajectories found for frame {start_frame}")
+        return [], None
+           
+    return rollout_trajectories, ground_truth
 
 def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, start_frame, horizon, rollout_idx):
     """
@@ -284,7 +225,6 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
         
         if eval_cfg is not None:
             # Determine guidance based on editing source like scene_editor.py
-            use_ui = False
             heuristic_config = None
             
             if hasattr(eval_cfg, 'edits') and hasattr(eval_cfg.edits, 'editing_source'):
@@ -308,7 +248,7 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
                     if obs_to_torch:
                         ex_obs = TensorUtils.to_torch(ex_obs, device=device, ignore_if_unspecified=True)
                     
-                    # Compute heuristic guidance like scene_editor.py lines 201-209
+                    # Compute heuristic guidance 
                     heuristic_guidance_cfg = compute_heuristic_guidance(
                         heuristic_config,
                         env,
@@ -330,12 +270,12 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
                         else:
                             heuristic_guidance_cfg = [heuristic_guidance_cfg[vi] for vi in valid_scene_inds]
                     
-                    # Merge guidance configs like scene_editor.py line 230
+                    # Merge guidance configs
                     guidance_config = merge_guidance_configs(guidance_config, heuristic_guidance_cfg)
 
         print(f"      Rollout {rollout_idx}: guidance_config type: {type(guidance_config)}, length: {len(guidance_config) if guidance_config else 'None'}")
         print(f"      Rollout {rollout_idx}: constraint_config type: {type(constraint_config)}, length: {len(constraint_config) if constraint_config else 'None'}")
-        # Call guided_rollout exactly like scene_editor.py (lines 269-280)
+        # Call guided_rollout
         stats, info, renderings = guided_rollout(
             env=env,
             policy=rollout_policy,
@@ -383,97 +323,7 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
         traceback.print_exc()
         return None
 
-def process_frame_trajectories(scene_idx, scene_name, frame_number, rollout_trajectories, ground_truth, debug=False):
-    """
-    Process trajectories from a specific frame and compute features with agent matching
-    """
-    if not rollout_trajectories or ground_truth is None:
-        return None
-    
-    print(f"    Processing {len(rollout_trajectories)} rollout trajectories")
-    print(f"    Ground truth agents: {list(ground_truth.keys())}")
-    
-    # Compute features for all rollouts (per agent)
-    rollout_features_list = []
-    for rollout_data in rollout_trajectories:
-        agent_trajectories = rollout_data.get("agent_trajectories", {})
-        if agent_trajectories:
-            agent_features = compute_irl_features(agent_trajectories, dt=0.1)
-            rollout_features_list.append(agent_features)
-    
-    # Compute features for ground truth (per agent)
-    gt_features = compute_irl_features(ground_truth, dt=0.1)
-    
-    # Compute feature expectations across rollouts for each agent
-    agent_feature_expectations = compute_agent_feature_expectations(rollout_features_list)
-     
-    # Add visualization at the end if debug is enabled
-    if debug:
-        from visualize_rollout_gt import visualize_guided_rollout_with_gt
-        plot_output_dir = os.path.join("irl_features_output", "visualization")
-        
-        try:
-            visualize_guided_rollout_with_gt(
-                rollout_trajectories=rollout_trajectories,
-                ground_truth=ground_truth,
-                scene_idx=scene_idx,
-                start_frame=frame_number,
-                scene_name=scene_name,
-                output_dir=plot_output_dir
-            )
-
-        except Exception as e:
-            print(f"    Visualization warning: {e}") 
-       
-    return {
-        'scene_idx': scene_idx,
-        'frame_number': frame_number,
-        'num_rollouts': len(rollout_trajectories),
-        'agent_rollout_features': rollout_features_list,
-        'agent_feature_expectations': agent_feature_expectations,
-        'agent_ground_truth_features': gt_features,
-        'ground_truth_trajectories': ground_truth  # a dict with agent_id keys
-    }
-
-def compute_agent_feature_expectations(agent_feature_list):
-    """
-    Compute expected feature values across multiple rollouts for each agent
-    """
-    if not agent_feature_list:
-        return {}
-    
-    # Get all agent IDs that appear in rollouts
-    all_agent_ids = set()
-    for agent_features in agent_feature_list:
-        all_agent_ids.update(agent_features.keys())
-    
-    agent_expectations = {}
-    
-    for agent_id in all_agent_ids:
-        # Collect features for this agent across all rollouts
-        agent_rollout_features = []
-        for agent_features in agent_feature_list:
-            if agent_id in agent_features:
-                agent_rollout_features.append(agent_features[agent_id])
-        
-        if agent_rollout_features:
-            feature_expectations = {}
-            feature_names = agent_rollout_features[0].keys()
-            
-            for feature_name in feature_names:
-                # Stack features from all rollouts for this agent
-                feature_stack = np.stack([f[feature_name] for f in agent_rollout_features])
-                # Compute expectation (mean across rollouts)
-                feature_expectations[feature_name] = np.mean(feature_stack, axis=0)
-                # Also compute standard deviation
-                feature_expectations[feature_name + '_std'] = np.std(feature_stack, axis=0)
-            
-            agent_expectations[agent_id] = feature_expectations
-    
-    return agent_expectations
-
-
-def extract_trajectories_from_rollouts(rollouts):
+def extract_trajectories_from_rollouts(rollouts, dynamic_agent_ids=None):
     """
     Extract trajectory data from rollout results as agent dictionaries
     """
@@ -514,79 +364,155 @@ def extract_trajectories_from_rollouts(rollouts):
                 # Create dictionary with agent_id as key
                 unique_agent_ids = unique_agent_ids.tolist()
                 for i, unique_agent_id in enumerate(unique_agent_ids):
-                    if i < len(centroids):
-                        agent_trajectories[unique_agent_id] = centroids[i]  # [time_steps, 2]
-            
+                    # Only extract if this agent is in our dynamic agents list
+                    if dynamic_agent_ids is None or unique_agent_id in dynamic_agent_ids:
+                        agent_trajectories[unique_agent_id] = centroids[i]
+
             if agent_trajectories:
                 extracted_trajectories.append({
                     "agent_trajectories": agent_trajectories,
-                    "agent_ids": unique_agent_ids,
+                    "agent_ids": list(agent_trajectories.keys()),
                 })
-    
+                print(f"      Extracted trajectories for {len(agent_trajectories)} dynamic agents from rollouts")
+
     return extracted_trajectories
 
-
-def setup_from_scene_editor_config(eval_cfg):
+def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon, 
+                                    filter_dynamic=False, 
+                                    min_velocity_threshold=2.0):
     """
-    Setup environment, policy, and model from scene editor configuration
-    Enhanced to properly extract algorithm config for history frames
+    Extract ground truth for the same dynamic agents found in rollouts
+    
+    Args:
+        env: Environment instance
+        scene_idx: Scene index
+        start_frame: Starting frame
+        horizon: Number of frames
+        filter_dynamic: Whether to filter for dynamic agents only
+        min_velocity_threshold: Minimum velocity threshold for dynamic filtering
     """
-    assert eval_cfg.env in ["nusc", "trajdata"], "Currently only nusc and trajdata environments are supported"
+    try:      
+        if not (hasattr(env, '_current_scenes') and len(env._current_scenes) > 0):
+            return None
         
-    # Set global batch type
-    set_global_batch_type("trajdata")
-    if eval_cfg.env == "nusc":
-        set_global_trajdata_batch_env("nusc_trainval")
-    elif eval_cfg.env == "trajdata":
-        set_global_trajdata_batch_env(eval_cfg.trajdata_source_test[0])
+        current_scene = env._current_scenes[0]
+        
+        # Get agent names and agent objects
+        if hasattr(current_scene, 'agents'):
+            agents = current_scene.agents
+            agent_names = [agent.name for agent in agents]
+        else:
+            print("      Cannot access agent names")
+            return None
+        
+        gt_trajectories = {}
+        
+        # Extract trajectories for each agent
+        for agent_idx, (agent, agent_name) in enumerate(zip(agents, agent_names)):           
+            agent_positions = []
+            
+            for frame_offset in range(horizon):
+                frame_idx = start_frame + frame_offset
+
+                # Check if agent is active in this frame using the agent object
+                if not (agent.first_timestep <= frame_idx < agent.last_timestep):
+                    # Agent is not active in this frame, so we can safely skip it
+                    continue
+                    
+                # Use the dataset's method to get agent states
+                if hasattr(current_scene, 'cache'):
+                    states = current_scene.cache.get_states([agent_name], frame_idx)
+                else:
+                    # Fallback: try dataset directly
+                    states = current_scene.dataset.get_states([agent_name], frame_idx)
+                
+                # Process valid states
+                if states is not None and hasattr(states, '__len__') and len(states) > 0:
+                    state = states[0]
+                    # Handle tensor conversion
+                    if hasattr(state, 'cpu'):
+                        state_np = state.cpu().numpy()
+                    elif hasattr(state, 'detach'):
+                        state_np = state.detach().numpy()
+                    else:
+                        state_np = np.array(state)
+                    
+                    # Extract x, y position
+                    agent_positions.append([float(state_np[0]), float(state_np[1])])
+                else:
+                    # No data returned, skip frame
+                    continue
+
+            # Only include agents with sufficient trajectory data
+            if len(agent_positions) >= 2:
+                gt_trajectories[agent_idx] = np.array(agent_positions)                 
+            else:
+                print(f"      Agent {agent_name} (ID {agent_idx}): insufficient data ({len(agent_positions)} positions)")
+        
+        # Step 2: Filter for dynamic agents if requested
+        if filter_dynamic and gt_trajectories:
+            dynamic_trajectories = {}
+
+            for agent_idx, trajectory in gt_trajectories.items():
+                if is_trajectory_dynamic(trajectory, min_velocity_threshold=min_velocity_threshold):
+                    dynamic_trajectories[agent_idx] = trajectory
+
+            print(f"    Filtered to {len(dynamic_trajectories)} dynamic agents out of {len(gt_trajectories)} total")
+            return dynamic_trajectories if dynamic_trajectories else None
+        else:
+            print(f"    No filtering applied, returning {len(gt_trajectories)} total agents")   
+            return gt_trajectories if gt_trajectories else None
+        
+    except Exception as e:
+        print(f"      Error using dataset get_states: {e}")
+        return None
+
+def process_frame_trajectories(scene_idx, scene_name, frame_number, rollout_trajectories, ground_truth, debug=False):
+    """
+    Process trajectories from a specific frame and compute features with agent matching
+    """
+    if not rollout_trajectories or ground_truth is None:
+        return None
     
-    # Set random seeds for reproducibility
-    np.random.seed(eval_cfg.seed)
-    random.seed(eval_cfg.seed)
-    torch.manual_seed(eval_cfg.seed)
-    torch.cuda.manual_seed(eval_cfg.seed)
+    print(f"    Processing {len(rollout_trajectories)} rollout trajectories")
+    print(f"    Ground truth agents: {list(ground_truth.keys())}")
     
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # Compute features for all rollouts (per agent)
+    rollout_features_list = []
+    for rollout_data in rollout_trajectories:
+        agent_trajectories = rollout_data.get("agent_trajectories", {})
+        if agent_trajectories:
+            agent_features = compute_irl_features(agent_trajectories, dt=0.1)
+            rollout_features_list.append(agent_features)
     
-    # Create policy and rollout wrapper
-    policy_composers = importlib.import_module("tbsim.evaluation.policy_composers")
-    composer_class = getattr(policy_composers, eval_cfg.eval_class)
-    composer = composer_class(eval_cfg, device)
-    policy, exp_config = composer.get_policy()
-    
-    # Set global trajdata batch raster config
-    set_global_trajdata_batch_raster_cfg(exp_config.env.rasterizer)
-    
-    # Extract policy_model
-    policy_model = None
-    print('policy', policy)
-    if hasattr(policy, 'model'):
-        policy_model = policy.model
-    
-    # Set evaluation time sampling/optimization parameters - like scene_editor.py
-    if eval_cfg.apply_guidance:
-        if eval_cfg.eval_class in ['SceneDiffuser', 'Diffuser', 'TrafficSim', 'BC', 'HierarchicalSampleNew']:
-            if policy_model is not None:
-                policy_model.set_guidance_optimization_params(eval_cfg.guidance_optimization_params)
-        if eval_cfg.eval_class in ['SceneDiffuser', 'Diffuser']:
-            if policy_model is not None:
-                policy_model.set_diffusion_specific_params(eval_cfg.diffusion_specific_params)
-    
-    # Create environment
-    if eval_cfg.env == "nusc":
-        env_builder = EnvNuscBuilder(eval_cfg, exp_config, device)
-    elif eval_cfg.env == "trajdata":
-        env_builder = EnvUnifiedBuilder(eval_cfg, exp_config, device)
-    else:
-        raise ValueError(f"Unknown environment: {eval_cfg.env}")
-    
-    env = env_builder.get_env()
-    
-    # Store exp_config in env for access to algorithm parameters
-    env.exp_config = exp_config
-    env.eval_cfg = eval_cfg
-    
-    return env, policy, policy_model
+    # Compute features for ground truth (per agent)
+    gt_features = compute_irl_features(ground_truth, dt=0.1)    
+        
+    # Add visualization at the end if debug is enabled
+    if debug:
+        from visualize_rollout_gt import visualize_guided_rollout_with_gt
+        plot_output_dir = os.path.join("irl_features_output", "visualization")
+        
+        try:
+            visualize_guided_rollout_with_gt(
+                rollout_trajectories=rollout_trajectories,
+                ground_truth=ground_truth,
+                scene_idx=scene_idx,
+                start_frame=frame_number,
+                scene_name=scene_name,
+                output_dir=plot_output_dir
+            )
+
+        except Exception as e:
+            print(f"    Visualization warning: {e}") 
+       
+    return {
+        'scene_idx': scene_idx,
+        'frame_number': frame_number,
+        'num_rollouts': len(rollout_trajectories),
+        'agent_rollout_features': rollout_features_list,
+        'agent_ground_truth_features': gt_features        
+    }
 
 def compute_irl_features(agent_trajectories_dict, dt=0.1):
     """
@@ -696,6 +622,103 @@ def compute_irl_features(agent_trajectories_dict, dt=0.1):
     
     return agent_features
 
+def setup_from_scene_editor_config(eval_cfg):
+    """
+    Setup environment, policy, and model from scene editor configuration
+    Enhanced to properly extract algorithm config for history frames
+    """
+    assert eval_cfg.env in ["nusc", "trajdata"], "Currently only nusc and trajdata environments are supported"
+        
+    # Set global batch type
+    set_global_batch_type("trajdata")
+    if eval_cfg.env == "nusc":
+        set_global_trajdata_batch_env("nusc_trainval")
+    elif eval_cfg.env == "trajdata":
+        set_global_trajdata_batch_env(eval_cfg.trajdata_source_test[0])
+    
+    # Set random seeds for reproducibility
+    np.random.seed(eval_cfg.seed)
+    random.seed(eval_cfg.seed)
+    torch.manual_seed(eval_cfg.seed)
+    torch.cuda.manual_seed(eval_cfg.seed)
+    
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    
+    # Create policy and rollout wrapper
+    policy_composers = importlib.import_module("tbsim.evaluation.policy_composers")
+    composer_class = getattr(policy_composers, eval_cfg.eval_class)
+    composer = composer_class(eval_cfg, device)
+    policy, exp_config = composer.get_policy()
+    
+    # Set global trajdata batch raster config
+    set_global_trajdata_batch_raster_cfg(exp_config.env.rasterizer)
+    
+    # Extract policy_model
+    policy_model = None
+    print('policy', policy)
+    if hasattr(policy, 'model'):
+        policy_model = policy.model
+    
+    # Set evaluation time sampling/optimization parameters - like scene_editor.py
+    if eval_cfg.apply_guidance:
+        if eval_cfg.eval_class in ['SceneDiffuser', 'Diffuser', 'TrafficSim', 'BC', 'HierarchicalSampleNew']:
+            if policy_model is not None:
+                policy_model.set_guidance_optimization_params(eval_cfg.guidance_optimization_params)
+        if eval_cfg.eval_class in ['SceneDiffuser', 'Diffuser']:
+            if policy_model is not None:
+                policy_model.set_diffusion_specific_params(eval_cfg.diffusion_specific_params)
+    
+    # Create environment
+    if eval_cfg.env == "nusc":
+        env_builder = EnvNuscBuilder(eval_cfg, exp_config, device)
+    elif eval_cfg.env == "trajdata":
+        env_builder = EnvUnifiedBuilder(eval_cfg, exp_config, device)
+    else:
+        raise ValueError(f"Unknown environment: {eval_cfg.env}")
+    
+    env = env_builder.get_env()
+    
+    # Store exp_config in env for access to algorithm parameters
+    env.exp_config = exp_config
+    env.eval_cfg = eval_cfg
+    
+    return env, policy, policy_model
+
+
+def is_trajectory_dynamic(trajectory, min_velocity_threshold=2.0, dt=0.1, min_distance_threshold=5.0):
+    """
+    Check if a trajectory represents dynamic behavior using multiple criteria
+    """
+    if len(trajectory) < 2:
+        return False
+    
+    # Compute velocities
+    vel_vectors = np.diff(trajectory, axis=0) / dt
+    velocities = np.linalg.norm(vel_vectors, axis=1)
+    
+    # Criterion 1: Maximum velocity
+    max_velocity = np.max(velocities)
+    if max_velocity > min_velocity_threshold:
+        return True
+    
+    # Criterion 2: Average velocity
+    avg_velocity = np.mean(velocities)
+    if avg_velocity > min_velocity_threshold * 0.5:
+        return True
+    
+    # Criterion 3: Total distance traveled
+    total_distance = np.sum(np.linalg.norm(np.diff(trajectory, axis=0), axis=1))
+    if total_distance > min_distance_threshold:
+        return True
+    
+    # Criterion 4: End-to-end displacement
+    displacement = np.linalg.norm(trajectory[-1] - trajectory[0])
+    if displacement > min_distance_threshold * 0.5:
+        return True
+    
+    return False
+
+
 if __name__ == "__main__":
     import argparse
     
@@ -710,24 +733,6 @@ if __name__ == "__main__":
                        help="Which env to run")
     parser.add_argument("--eval_class", type=str, default="Diffuser",
                        help="Evaluation class")
-    parser.add_argument("--policy_ckpt_dir", type=str, default=default_config.policy_ckpt_dir,
-                       help=f"Directory for policy checkpoint (default: {default_config.policy_ckpt_dir})")
-    parser.add_argument("--policy_ckpt_key", type=str, default=default_config.policy_ckpt_key,
-                       help=f"Key for policy checkpoint (default: {default_config.policy_ckpt_key})")
-    parser.add_argument("--output_dir", type=str, default=default_config.output_dir,
-                       help=f"Output directory (default: {default_config.output_dir})")
-    parser.add_argument("--scene_indices", nargs='+', type=int, default=default_config.scene_indices,
-                       help=f"Scene indices (default: {default_config.scene_indices})")
-    parser.add_argument("--start_frames", nargs='+', type=int, default=default_config.start_frames,
-                       help="Optional start frames")
-    parser.add_argument("--horizon", type=int, default=default_config.horizon,
-                       help=f"Fixed horizon for rollouts (default: {default_config.horizon})")
-    parser.add_argument("--num_sim_per_scene", type=int, default=default_config.num_sim_per_scene,
-                       help=f"Number of simulations per scene (default: {default_config.num_sim_per_scene})")
-    parser.add_argument("--num_rollouts", type=int, default=default_config.num_rollouts,
-                       help=f"Number of rollouts (default: {default_config.num_rollouts})")
-    parser.add_argument("--debug", type=bool, default=default_config.debug,
-                       help=f"Debug mode (default: {default_config.debug})")
 
     parser.add_argument(
         "--editing_source",
@@ -747,13 +752,7 @@ if __name__ == "__main__":
         cfg.eval_class = args.eval_class
     # Set dataset path
     if args.dataset_path is not None:
-        cfg.dataset_path = args.dataset_path
-    
-    # Set checkpoint paths 
-    if args.policy_ckpt_dir is not None:
-        assert args.policy_ckpt_key is not None, "Please specify a key to look for the checkpoint, e.g., 'iter50000'"
-        cfg.ckpt.policy.ckpt_dir = args.policy_ckpt_dir
-        cfg.ckpt.policy.ckpt_key = args.policy_ckpt_key
+        cfg.dataset_path = args.dataset_path   
     
     # Set environment
     if args.env is not None:
@@ -762,18 +761,21 @@ if __name__ == "__main__":
     if args.editing_source is not None:
         cfg.edits.editing_source = args.editing_source
     if not isinstance(cfg.edits.editing_source, list):
-        cfg.edits.editing_source = [cfg.edits.editing_source]
+        cfg.edits.editing_source = [cfg.edits.editing_source]      
         
-    # Copy env-specific config to global level (like scene_editor.py does)
+    # Copy env-specific config to global level 
     for k in cfg[cfg.env]:
         cfg[k] = cfg[cfg.env][k]
     
-    # Remove env-specific sections (like scene_editor.py does)
+    # Remove env-specific sections
     cfg.pop("nusc", None)
     cfg.pop("trajdata", None)
     
+    # Set checkpoint paths   
+    cfg.ckpt.policy.ckpt_dir = default_config.policy_ckpt_dir
+    cfg.ckpt.policy.ckpt_key = default_config.policy_ckpt_key
     # Set results directory to match your output directory
-    cfg.results_dir = args.output_dir
+    cfg.results_dir = default_config.output_dir
     
     try:
         # Setup environment and model
@@ -784,11 +786,15 @@ if __name__ == "__main__":
         print("Starting feature extraction...")
         features = extract_irl_features_from_all_frames(
             env, policy, policy_model, 
-            args.scene_indices, args.start_frames, 
-            args.output_dir, args.horizon,
-            args.num_sim_per_scene,
-            args.num_rollouts,
-            args.debug
+            default_config.scene_indices, 
+            default_config.start_frames, 
+            default_config.output_dir, 
+            default_config.horizon,
+            default_config.num_sim_per_scene,
+            default_config.num_rollouts,
+            default_config.filter_dynamic,
+            default_config.min_velocity_threshold,
+            default_config.debug
         )
         
         print("Feature extraction from all frames complete!")

@@ -22,6 +22,9 @@ class FeatureExtractionConfig:
     
     debug: bool = True  # Debug mode for additional logging
     
+    filter_dynamic: bool = True  # Filter for dynamic agents only    
+    min_velocity_threshold: float = 2.0 # Minimum velocity threshold for filtering agents
+    
     # Feature extraction parameters
     num_rollouts: int = 8
     horizon: int = 50 # Fixed horizon for generating rollouts

@@ -220,12 +220,12 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_i
         if gt_drawn or rollout_trajectories:
             ax.legend(loc='upper right', fontsize=8, framealpha=0.8)
         
-        ax.set_title(f'Scene {scene_idx} Frame {start_frame}: Rollouts vs Ground Truth (Rasterized)')
+        ax.set_title(f'{scene_name} Frame {start_frame}: Rollouts vs Ground Truth (Rasterized)')
         ax.set_xlabel('Raster X')
         ax.set_ylabel('Raster Y')
         
         # Save plot
-        output_path = os.path.join(output_dir, f"scene_{scene_idx}_frame_{start_frame}_rasterized.png")
+        output_path = os.path.join(output_dir, f"{scene_name}_frame_{start_frame}_rasterized.png")
         plt.savefig(output_path, dpi=200, bbox_inches="tight", pad_inches=0)
         plt.close(fig)
         
