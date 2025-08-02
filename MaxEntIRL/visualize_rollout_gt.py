@@ -129,7 +129,7 @@ def draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, start
                 ax.plot(raster_traj[:, 0], raster_traj[:, 1], 
                        color=rollout_colors[rollout_idx], linewidth=2.0, 
                        alpha=alpha, 
-                       label=f'Rollout {rollout_idx} Agent {agent_id}' if rollout_idx < 3 else "")
+                       label=f'Rollout {rollout_idx} Agent {agent_id}')
                 
                 # Highlight current position if within trajectory bounds
                 if 0 <= start_frame < len(raster_traj):

@@ -125,7 +125,7 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
 
         # Save features for current scene
         if scene_features:            
-            output_path = os.path.join(output_dir, f"scene_{scene_idx}_irl_features.pkl")
+            output_path = os.path.join(output_dir, f"{scene_name}_irl_features.pkl")
             with open(output_path, 'wb') as f:
                 pickle.dump(scene_features, f)
 
@@ -461,7 +461,7 @@ def process_frame_trajectories(scene_idx, scene_name, frame_number, rollout_traj
                 dynamic_agents_features[agent_id] = []
             dynamic_agents_features[agent_id].append(features)
     print(f"    Computed features for {len(dynamic_agents_features)} dynamic agents across {len(rollout_trajectories)} rollouts")
-    
+
     # Compute features for ground truth (per dynamic agent)
     dynamic_gt_features = compute_irl_features(ground_truth, dynamic_agent_ids, dt=0.1)
         
