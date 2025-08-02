@@ -3,6 +3,7 @@ import os
 import torch
 import random
 import importlib
+import pickle
 from irl_config import default_config
 from tbsim.configs.scene_edit_config import SceneEditingConfig
 from tbsim.evaluation.env_builders import EnvNuscBuilder, EnvUnifiedBuilder, EnvL5Builder
@@ -88,6 +89,7 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
 
     # Process each scene with its determined start frames
     for si_idx, scene_idx in enumerate(scene_indices):
+        scene_features = []    
         scene_start_frames = start_frame_index[si_idx]
         scene_name = env._current_scenes[0].scene.name 
         
@@ -98,15 +100,12 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
             scenes_valid = env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
             if not scenes_valid[0]:
                 print(f"Scene {scene_idx} invalid at start frame {start_frame}, skipping...")
-                continue                      
-                       
-            scene_features = []          
-                            
+                continue
+
             # Generate rollouts starting from this specific frame
             rollout_trajectories, gt_trajectories = generate_rollouts_from_specific_frame(
                 env, policy, policy_model, scene_idx, start_frame, 
-                num_rollouts=num_rollouts, horizon=horizon, 
-                filter_dynamic=filter_dynamic, min_velocity_threshold=2.0
+                num_rollouts=num_rollouts, horizon=horizon
             )
 
             if not rollout_trajectories or gt_trajectories is None:
@@ -114,29 +113,25 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indice
                 continue
                         
             frame_features_data = process_frame_trajectories(
-                scene_idx, scene_name, start_frame, rollout_trajectories, gt_trajectories, debug=debug
+                scene_idx, scene_name, start_frame, rollout_trajectories, gt_trajectories, 
+                filter_dynamic=filter_dynamic, min_velocity_threshold=2.0, debug=debug
             )
             
             if frame_features_data:
-                scene_features.append(frame_features_data)
-            
-            # Save features for this scene-start_frame combination
-            if scene_features:
-                scene_summary = {
-                    'scene_idx': scene_idx,
-                    'start_frame': start_frame,
-                    'num_frames_processed': len(scene_features),
-                    'frame_features': scene_features
-                }
-                
-                output_path = os.path.join(output_dir, f"scene_{scene_idx}_start_{start_frame}_all_frames_irl_features.pkl")
-                import pickle
-                with open(output_path, 'wb') as f:
-                    pickle.dump(scene_summary, f)
-                
-                print(f"Saved {len(scene_features)} frame features to {output_path}")
-                all_features[f"{scene_idx}_{start_frame}"] = scene_summary
-    
+                scene_features.append({
+                    "start_frame": start_frame,
+                    "frame_features": frame_features_data
+                })
+
+        # Save features for current scene
+        if scene_features:            
+            output_path = os.path.join(output_dir, f"scene_{scene_idx}_irl_features.pkl")
+            with open(output_path, 'wb') as f:
+                pickle.dump(scene_features, f)
+
+            print(f"Saved {len(scene_features)} frame features to {output_path}")
+            all_features[f"{scene_idx}"] = scene_features
+
     return all_features
 
 
@@ -146,19 +141,13 @@ def generate_rollouts_from_specific_frame(env, policy, policy_model, scene_idx, 
     """
     Generate multiple rollouts starting from a SPECIFIC frame
     """
-    # Step 1: Extract ground truth trajectory first to identify dynamic agents
-    print(f"    Step 1: Extracting ground truth to identify dynamic agents")
-    ground_truth = extract_ground_truth_trajectory(
-        env, scene_idx, start_frame, horizon, filter_dynamic=filter_dynamic, 
-        min_velocity_threshold=min_velocity_threshold
-    )
-    
+    # Step 1: Extract ground truth trajectory
+    print(f"    Step 1: Extracting ground truth trajectory for scene {scene_idx}, frame {start_frame}")
+    ground_truth = extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon)
+
     if ground_truth is None or len(ground_truth) == 0:
         print(f"    No dynamic agents found in ground truth, skipping rollouts")
         return None, None
-    
-    dynamic_agent_ids = list(ground_truth.keys())
-    print(f"    Found {len(dynamic_agent_ids)} dynamic agents: {dynamic_agent_ids}")
     
     # Step 2: Generate rollouts
     rollouts = []
@@ -189,8 +178,8 @@ def generate_rollouts_from_specific_frame(env, policy, policy_model, scene_idx, 
     
     print(f"    Generated {len(rollouts)} valid rollouts out of {num_rollouts} attempts")    
     
-    # Step 3: Extract trajectories from rollouts, but only for the dynamic agents we identified
-    rollout_trajectories = extract_trajectories_from_rollouts(rollouts, dynamic_agent_ids=dynamic_agent_ids)
+    # Step 3: Extract trajectories from rollouts
+    rollout_trajectories = extract_trajectories_from_rollouts(rollouts)
 
     if not rollout_trajectories:
         print(f"    Warning: No dynamic agent trajectories found for frame {start_frame}")
@@ -323,20 +312,20 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
         traceback.print_exc()
         return None
 
-def extract_trajectories_from_rollouts(rollouts, dynamic_agent_ids=None):
+def extract_trajectories_from_rollouts(rollouts):
     """
-    Extract trajectory data from rollout results as agent dictionaries
+    Extract trajectory data from each rollout results
     """
-    extracted_trajectories = []
+    agents_trajectories_all_rollouts = []
     
-    for rollout in rollouts:
+    for rollout_idx, rollout in enumerate(rollouts):
         if rollout is None:
             continue
             
         buffer = rollout.get('buffer')
         if buffer is not None and isinstance(buffer, dict):
-            # Extract agent trajectories as dictionary
-            agent_trajectories = {}
+            # Extract agents trajectories from each rollout buffer
+            agents_per_rollout = {}
             
             # Get agent IDs
             agent_ids = None
@@ -361,35 +350,27 @@ def extract_trajectories_from_rollouts(rollouts, dynamic_agent_ids=None):
                 else:
                     centroids = np.array(centroids)
                 
-                # Create dictionary with agent_id as key
+                # Create dictionary with agent_id as key for a rollout
                 unique_agent_ids = unique_agent_ids.tolist()
                 for i, unique_agent_id in enumerate(unique_agent_ids):
-                    # Only extract if this agent is in our dynamic agents list
-                    if dynamic_agent_ids is None or unique_agent_id in dynamic_agent_ids:
-                        agent_trajectories[unique_agent_id] = centroids[i]
+                    if unique_agent_id not in agents_per_rollout:
+                        agents_per_rollout[unique_agent_id] = centroids[i]
 
-            if agent_trajectories:
-                extracted_trajectories.append({
-                    "agent_trajectories": agent_trajectories,
-                    "agent_ids": list(agent_trajectories.keys()),
-                })
-                print(f"      Extracted trajectories for {len(agent_trajectories)} dynamic agents from rollouts")
+            if agents_per_rollout:
+                agents_trajectories_all_rollouts.append(agents_per_rollout)
+                print(f"      Extracted trajectories for {len(agents_per_rollout)} agents from rollout {rollout_idx}")
 
-    return extracted_trajectories
+    return agents_trajectories_all_rollouts
 
-def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon, 
-                                    filter_dynamic=False, 
-                                    min_velocity_threshold=2.0):
+def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon):
     """
-    Extract ground truth for the same dynamic agents found in rollouts
+    Extract ground truth for the current scene and start frame
     
     Args:
         env: Environment instance
         scene_idx: Scene index
         start_frame: Starting frame
         horizon: Number of frames
-        filter_dynamic: Whether to filter for dynamic agents only
-        min_velocity_threshold: Minimum velocity threshold for dynamic filtering
     """
     try:      
         if not (hasattr(env, '_current_scenes') and len(env._current_scenes) > 0):
@@ -407,7 +388,7 @@ def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon,
         
         gt_trajectories = {}
         
-        # Extract trajectories for each agent
+        # Step 1: Extract gt trajectories for each agent
         for agent_idx, (agent, agent_name) in enumerate(zip(agents, agent_names)):           
             agent_positions = []
             
@@ -448,45 +429,41 @@ def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon,
                 gt_trajectories[agent_idx] = np.array(agent_positions)                 
             else:
                 print(f"      Agent {agent_name} (ID {agent_idx}): insufficient data ({len(agent_positions)} positions)")
-        
-        # Step 2: Filter for dynamic agents if requested
-        if filter_dynamic and gt_trajectories:
-            dynamic_trajectories = {}
-
-            for agent_idx, trajectory in gt_trajectories.items():
-                if is_trajectory_dynamic(trajectory, min_velocity_threshold=min_velocity_threshold):
-                    dynamic_trajectories[agent_idx] = trajectory
-
-            print(f"    Filtered to {len(dynamic_trajectories)} dynamic agents out of {len(gt_trajectories)} total")
-            return dynamic_trajectories if dynamic_trajectories else None
-        else:
-            print(f"    No filtering applied, returning {len(gt_trajectories)} total agents")   
-            return gt_trajectories if gt_trajectories else None
+                
+        return gt_trajectories
         
     except Exception as e:
         print(f"      Error using dataset get_states: {e}")
         return None
 
-def process_frame_trajectories(scene_idx, scene_name, frame_number, rollout_trajectories, ground_truth, debug=False):
+def process_frame_trajectories(scene_idx, scene_name, frame_number, rollout_trajectories, ground_truth, 
+                               filter_dynamic=False, min_velocity_threshold=2.0, debug=False):
     """
     Process trajectories from a specific frame and compute features with agent matching
     """
     if not rollout_trajectories or ground_truth is None:
         return None
     
-    print(f"    Processing {len(rollout_trajectories)} rollout trajectories")
-    print(f"    Ground truth agents: {list(ground_truth.keys())}")
+    # Step 1: Filter for dynamic agents for feature computation
+    dynamic_agent_ids = []
+    for agent_idx, trajectory in ground_truth.items():
+        if is_trajectory_dynamic(trajectory, min_velocity_threshold=min_velocity_threshold):
+            dynamic_agent_ids.append(agent_idx)
+
+    print(f"    Filtered to {len(dynamic_agent_ids)} dynamic agents out of {len(ground_truth)} total")
+
+    # Compute features for all rollouts (per dynamic agent)
+    dynamic_agents_features = {}
+    for one_rollout in rollout_trajectories:
+        agent_features = compute_irl_features(one_rollout, dynamic_agent_ids, dt=0.1)
+        for agent_id, features in agent_features.items():
+            if agent_id not in dynamic_agents_features:
+                dynamic_agents_features[agent_id] = []
+            dynamic_agents_features[agent_id].append(features)
+    print(f"    Computed features for {len(dynamic_agents_features)} dynamic agents across {len(rollout_trajectories)} rollouts")
     
-    # Compute features for all rollouts (per agent)
-    rollout_features_list = []
-    for rollout_data in rollout_trajectories:
-        agent_trajectories = rollout_data.get("agent_trajectories", {})
-        if agent_trajectories:
-            agent_features = compute_irl_features(agent_trajectories, dt=0.1)
-            rollout_features_list.append(agent_features)
-    
-    # Compute features for ground truth (per agent)
-    gt_features = compute_irl_features(ground_truth, dt=0.1)    
+    # Compute features for ground truth (per dynamic agent)
+    dynamic_gt_features = compute_irl_features(ground_truth, dynamic_agent_ids, dt=0.1)
         
     # Add visualization at the end if debug is enabled
     if debug:
@@ -494,31 +471,33 @@ def process_frame_trajectories(scene_idx, scene_name, frame_number, rollout_traj
         plot_output_dir = os.path.join("irl_features_output", "visualization")
         
         try:
+            if not filter_dynamic:
+                dynamic_agent_ids = None  # No filtering, use all agents
+                
             visualize_guided_rollout_with_gt(
                 rollout_trajectories=rollout_trajectories,
                 ground_truth=ground_truth,
                 scene_idx=scene_idx,
                 start_frame=frame_number,
                 scene_name=scene_name,
-                output_dir=plot_output_dir
+                output_dir=plot_output_dir,
+                dynamic_agent_ids=dynamic_agent_ids,
             )
 
         except Exception as e:
             print(f"    Visualization warning: {e}") 
        
     return {
-        'scene_idx': scene_idx,
-        'frame_number': frame_number,
-        'num_rollouts': len(rollout_trajectories),
-        'agent_rollout_features': rollout_features_list,
-        'agent_ground_truth_features': gt_features        
+        'agent_rollout_features': dynamic_agents_features,
+        'agent_ground_truth_features': dynamic_gt_features
     }
 
-def compute_irl_features(agent_trajectories_dict, dt=0.1):
+def compute_irl_features(agent_trajectories_dict, dynamic_agent_ids, dt=0.1):
     """
     Compute IRL features for agent dictionary format
     Args:
         agent_trajectories_dict: Dict with agent_id as key, trajectory [time_steps, 2] as value
+        dynamic_agent_ids: List of dynamic agent IDs to compute features for
         dt: time step in seconds
     Returns:
         dict with agent_id as key, features dict as value
@@ -531,6 +510,9 @@ def compute_irl_features(agent_trajectories_dict, dt=0.1):
         all_agent_data[agent_id] = traj
     
     for agent_id, traj in agent_trajectories_dict.items():
+        if agent_id not in dynamic_agent_ids:
+            continue
+
         num_steps = len(traj)
         features = {}
         

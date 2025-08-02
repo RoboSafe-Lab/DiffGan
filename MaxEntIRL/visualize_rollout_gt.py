@@ -22,7 +22,7 @@ def transform_points_to_raster(points, raster_from_world):
         return np.array([transform_points_to_raster(traj, raster_from_world) for traj in points])
 
 
-def draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, current_frame=0):
+def draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, start_frame, dynamic_agent_ids=None):
     """
     Draw ground truth trajectories on the plot
     
@@ -30,8 +30,9 @@ def draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, current_
         ax: matplotlib axes
         ground_truth: dict with agent_id as key, trajectory as value
         raster_from_world: transformation matrix from world to raster coordinates
-        current_frame: current frame index for highlighting current position
-    
+        start_frame: start frame index for highlighting current position
+        dynamic_agent_ids: List of dynamic agent IDs to filter trajectories
+
     Returns:
         bool: True if any ground truth was drawn
     """
@@ -39,9 +40,21 @@ def draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, current_
         return False
     
     gt_drawn = False
-    colors = plt.cm.Set1(np.linspace(0, 1, len(ground_truth)))
+    # Filter trajectories based on dynamic_agent_ids
+    filtered_ground_truth = {}
+    if dynamic_agent_ids is not None:
+        for agent_id, trajectory in ground_truth.items():
+            if agent_id in dynamic_agent_ids:
+                filtered_ground_truth[agent_id] = trajectory
+    else:
+        filtered_ground_truth = ground_truth
     
-    for i, (agent_id, trajectory) in enumerate(ground_truth.items()):
+    if not filtered_ground_truth:
+        return False
+
+    colors = plt.cm.Set1(np.linspace(0, 1, len(filtered_ground_truth)))
+
+    for i, (agent_id, trajectory) in enumerate(filtered_ground_truth.items()):
         if len(trajectory) == 0:
             continue
             
@@ -60,8 +73,8 @@ def draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, current_
                    alpha=0.8, label=f'GT Agent {agent_id}')
             
             # Highlight current position if within trajectory bounds
-            if 0 <= current_frame < len(raster_traj):
-                ax.scatter(raster_traj[current_frame, 0], raster_traj[current_frame, 1],
+            if 0 <= start_frame < len(raster_traj):
+                ax.scatter(raster_traj[start_frame, 0], raster_traj[start_frame, 1],
                           color=colors[i], s=100, marker='o', 
                           edgecolors='black', linewidth=2)
             
@@ -77,7 +90,7 @@ def draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, current_
     
     return gt_drawn
 
-def draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, current_frame=0):
+def draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, start_frame, dynamic_agent_ids=None):
     """
     Draw rollout trajectories on the plot
     
@@ -85,7 +98,8 @@ def draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, curre
         ax: matplotlib axes
         rollout_trajectories: list of rollout data with agent trajectories from extract_features.py
         raster_from_world: transformation matrix from world to raster coordinates
-        current_frame: current frame index for highlighting current position
+        start_frame: start frame index for highlighting current position
+        dynamic_agent_ids: List of dynamic agent IDs to filter trajectories
     """
     if not rollout_trajectories:
         return
@@ -93,10 +107,11 @@ def draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, curre
     # Use different colors for different rollouts
     rollout_colors = plt.cm.Set2(np.linspace(0, 1, len(rollout_trajectories)))
     
-    for rollout_idx, rollout_data in enumerate(rollout_trajectories):
-        agent_trajectories = rollout_data.get("agent_trajectories", {})
-        
-        for agent_id, trajectory in agent_trajectories.items():
+    for rollout_idx, rollout_data in enumerate(rollout_trajectories):        
+        for agent_id, trajectory in rollout_data.items():
+            # Skip non-dynamic agents if filtering is applied
+            if dynamic_agent_ids is not None and agent_id not in dynamic_agent_ids:
+                continue
             if len(trajectory) == 0:
                 continue
                 
@@ -117,8 +132,8 @@ def draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, curre
                        label=f'Rollout {rollout_idx} Agent {agent_id}' if rollout_idx < 3 else "")
                 
                 # Highlight current position if within trajectory bounds
-                if 0 <= current_frame < len(raster_traj):
-                    ax.scatter(raster_traj[current_frame, 0], raster_traj[current_frame, 1],
+                if 0 <= start_frame < len(raster_traj):
+                    ax.scatter(raster_traj[start_frame, 0], raster_traj[start_frame, 1],
                               color=rollout_colors[rollout_idx], s=60, marker='o', 
                               alpha=alpha, edgecolors='white', linewidth=1)
 
@@ -144,7 +159,7 @@ def rasterize_rendering():
     return render_rasterizer
 
 def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_idx, 
-                                   start_frame, scene_name, output_dir):
+                                   start_frame, scene_name, output_dir, dynamic_agent_ids):
     """
     Create visualization with rasterized map background using data from extract_features.py
     
@@ -155,6 +170,7 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_i
         start_frame: Starting frame
         scene_name: Scene name
         output_dir: Output directory
+        dynamic_agent_ids: List of dynamic agent IDs to filter trajectories
     """
     try:
         rasterizer = rasterize_rendering()
@@ -167,15 +183,18 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_i
         
         if ground_truth:
             for agent_id, traj in ground_truth.items():
+                if dynamic_agent_ids and agent_id not in dynamic_agent_ids:
+                    continue  # Skip non-dynamic agents if filtering is applied
                 if len(traj) > 0:
                     traj = np.array(traj)
                     if len(traj.shape) == 2 and traj.shape[1] >= 2:
                         all_positions.extend(traj[:, :2])
         
         if rollout_trajectories:
-            for rollout_data in rollout_trajectories:
-                agent_trajectories = rollout_data.get("agent_trajectories", {})
-                for agent_id, traj in agent_trajectories.items():
+            for one_rollout in rollout_trajectories:
+                for agent_id, traj in one_rollout.items():
+                    if dynamic_agent_ids and agent_id not in dynamic_agent_ids:
+                        continue  # Skip non-dynamic agents if filtering is applied
                     if len(traj) > 0:
                         traj = np.array(traj)
                         if len(traj.shape) == 2 and traj.shape[1] >= 2:
@@ -210,12 +229,12 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_i
         
         # Draw ground truth trajectories
         if ground_truth:
-            gt_drawn = draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, 0)
+            gt_drawn = draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, start_frame, dynamic_agent_ids)
         
         # Draw rollout trajectories  
         if rollout_trajectories:
-            draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, 0)
-        
+            draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, start_frame, dynamic_agent_ids)
+
         # Add legend and formatting
         if gt_drawn or rollout_trajectories:
             ax.legend(loc='upper right', fontsize=8, framealpha=0.8)

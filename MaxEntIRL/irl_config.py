@@ -14,8 +14,8 @@ class FeatureExtractionConfig:
     output_dir: str = "irl_features_output"
     
     # Scene selection
-    scene_indices: List[int] = field(default_factory=lambda: [0])
-    start_frames: List[int] = field(default_factory=lambda: [31])
+    scene_indices: List[int] = field(default_factory=lambda: [0]) # Default to first scene
+    start_frames: List[int] = field(default_factory=lambda: [31]) # Default start frame for each scene
     num_scenes_to_evaluate: int = 50
     num_scenes_per_batch: int = 1
     num_sim_per_scene: int = 1
