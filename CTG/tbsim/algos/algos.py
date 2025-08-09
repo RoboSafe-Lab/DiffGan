@@ -2153,8 +2153,7 @@ class STRIVETrafficModel(pl.LightningModule):
             weights_scaling=[1.0, 1.0, 1.0],
         )
 
-        print(self.nets["policy"])
-
+        
     @property
     def checkpoint_monitor_keys(self):
         return {"valLoss": "val/losses_prediction_loss", "minADE": "val/metrics_ego_avg_ADE"}
@@ -2258,7 +2257,8 @@ class STRIVETrafficModel(pl.LightningModule):
         obs_dict = dict(obs_dict)
 
         # already called in policy_composer, but just for good measure...
-        self.nets["policy"].eval()
+        if not self.training:
+            self.nets["policy"].eval()
         # update with current "global" timestep
         self.nets["policy"].update_guidance(global_t=kwargs['step_index'])
 

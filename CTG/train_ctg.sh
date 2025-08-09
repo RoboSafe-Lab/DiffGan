@@ -20,5 +20,5 @@ export PYTHONPATH=$HOME/CTGTest/CTG/
 
 export WANDB_APIKEY=fca5ee0f0b5f26a561e73544b04d48a96daa94b4
 # Run the appropriate command based on SLURM_ARRAY_TASK_ID
-python ~/CTGTest/CTG/scripts/train.py --dataset_path ../behavior-generation-dataset/nuscenes --config_name trajdata_nusc_diff
+python ~/CTGTest/CTG/scripts/train.py --dataset_path ../behavior-generation-dataset/nuscenes --config_name trajdata_nusc_strive --remove_exp_dir
 

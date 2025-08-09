@@ -611,6 +611,10 @@ class STRIVEConfig(BehaviorCloningConfig):
         #     'agent_hist': [( -1.198923, 0.000128, 0.953161, 4.698113, 2.051664,  ), ( 3.180241, 0.159182, 2.129779, 2.116855, 0.388149,  )],
         #     'neighbor_hist': [( -0.237441, 1.118636, 0.489575, 0.868664, 0.222984,  ), ( 7.587311, 7.444489, 1.680952, 2.578202, 0.832563,  )],
         # }
+        self.agent_hist_norm_info = self.nusc_norm_info['agent_hist']
+        self.neighbor_hist_norm_info = self.nusc_norm_info['neighbor_hist']
+
+
 
 class SceneDiffuserConfig(AlgoConfig):
     def __init__(self):
