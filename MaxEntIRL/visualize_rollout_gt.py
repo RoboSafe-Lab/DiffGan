@@ -70,13 +70,7 @@ def draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, start_fr
             # Draw full trajectory as dashed line
             ax.plot(raster_traj[:, 0], raster_traj[:, 1], 
                    color=colors[i], linewidth=3.0, linestyle='--', 
-                   alpha=0.8, label=f'GT Agent {agent_id}')
-            
-            # Highlight current position if within trajectory bounds
-            if 0 <= start_frame < len(raster_traj):
-                ax.scatter(raster_traj[start_frame, 0], raster_traj[start_frame, 1],
-                          color=colors[i], s=100, marker='o', 
-                          edgecolors='black', linewidth=2)
+                   alpha=0.8, label=f'GT Agent {agent_id}')           
             
             # Mark start and end positions
             ax.scatter(raster_traj[0, 0], raster_traj[0, 1],
@@ -129,14 +123,7 @@ def draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, start
                 ax.plot(raster_traj[:, 0], raster_traj[:, 1], 
                        color=rollout_colors[rollout_idx], linewidth=2.0, 
                        alpha=alpha, 
-                       label=f'Rollout {rollout_idx} Agent {agent_id}')
-                
-                # Highlight current position if within trajectory bounds
-                if 0 <= start_frame < len(raster_traj):
-                    ax.scatter(raster_traj[start_frame, 0], raster_traj[start_frame, 1],
-                              color=rollout_colors[rollout_idx], s=60, marker='o', 
-                              alpha=alpha, edgecolors='white', linewidth=1)
-
+                       label=f'Rollout {rollout_idx} Agent {agent_id}')             
 
 def rasterize_rendering():
     trajdata_data_dirs = {"nusc_trainval" : "../behavior-generation-dataset/nuscenes"} # "nusc_mini"
@@ -257,7 +244,7 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_i
 
 # Add a convenience function for testing without rasterizer
 def visualize_trajectories_simple(rollout_trajectories, ground_truth, scene_idx, 
-                                start_frame, output_dir):
+                                start_frame, scene_name, output_dir, dynamic_agent_ids):
     """
     Simple visualization without rasterized background for testing
     """
@@ -284,25 +271,28 @@ def visualize_trajectories_simple(rollout_trajectories, ground_truth, scene_idx,
     if rollout_trajectories:
         rollout_colors = plt.cm.Set2(np.linspace(0, 1, len(rollout_trajectories)))
         for rollout_idx, rollout_data in enumerate(rollout_trajectories):
-            agent_trajectories = rollout_data.get("agent_trajectories", {})
+            agent_trajectories = rollout_data
             for agent_id, trajectory in agent_trajectories.items():
+                # Filter by dynamic agents if specified
+                if dynamic_agent_ids is not None and agent_id not in dynamic_agent_ids:
+                    continue
                 trajectory = np.array(trajectory)
                 if len(trajectory) > 1 and len(trajectory.shape) == 2:
                     alpha = 0.5 if len(rollout_trajectories) > 1 else 0.8
                     ax.plot(trajectory[:, 0], trajectory[:, 1], 
                            color=rollout_colors[rollout_idx], linewidth=2.0, 
                            alpha=alpha, 
-                           label=f'Rollout {rollout_idx} Agent {agent_id}' if rollout_idx < 3 else "")
+                           label=f'Rollout {rollout_idx} Agent {agent_id}')
     
     ax.set_xlabel('X Position (m)')
     ax.set_ylabel('Y Position (m)')
-    ax.set_title(f'Scene {scene_idx} Frame {start_frame}: Rollouts vs Ground Truth')
+    ax.set_title(f'Scene {scene_name} Frame {start_frame}: Rollouts vs Ground Truth')
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax.grid(True, alpha=0.3)
     ax.axis('equal')
     
     # Save plot
-    output_path = os.path.join(output_dir, f"scene_{scene_idx}_frame_{start_frame}_simple.png")
+    output_path = os.path.join(output_dir, f"scene_{scene_name}_frame_{start_frame}_simple.png")
     plt.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     

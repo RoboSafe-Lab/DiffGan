@@ -1,4 +1,5 @@
 import os
+import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 
@@ -14,9 +15,10 @@ class FeatureExtractionConfig:
     output_dir: str = "irl_features_output"
     
     # Scene selection
-    scene_indices: List[int] = field(default_factory=lambda: [0]) # Default to first scene
-    start_frames: List[int] = field(default_factory=lambda: [31]) # Default start frame for each scene
-    num_scenes_to_evaluate: int = 50
+    # scene_indices: List[int] = field(default_factory=lambda: [0]) # Default to first scene
+   
+    num_scenes_to_evaluate: int = 10
+    eval_scenes: List[int] = field(default_factory=lambda: np.arange(0, 100, 10).tolist())
     num_scenes_per_batch: int = 1
     num_sim_per_scene: int = 1
     
@@ -57,10 +59,7 @@ class FeatureExtractionConfig:
         print(f"✓ Policy checkpoint dir: {self.policy_ckpt_dir}")
         print(f"✓ Policy checkpoint key: {self.policy_ckpt_key}")
         
-        # Set default scenes if none provided
-        if not self.scene_indices:
-            self.scene_indices = list(range(num_scenes_to_evaluate))
-            
+           
         # Ensure output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
 

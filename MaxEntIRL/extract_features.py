@@ -5,6 +5,7 @@ import random
 import importlib
 import pickle
 from irl_config import default_config
+from visualize_rollout_gt import visualize_guided_rollout_with_gt, visualize_trajectories_simple
 from tbsim.configs.scene_edit_config import SceneEditingConfig
 from tbsim.evaluation.env_builders import EnvNuscBuilder, EnvUnifiedBuilder, EnvL5Builder
 from tbsim.policies.wrappers import RolloutWrapper
@@ -12,138 +13,136 @@ from tbsim.utils.batch_utils import set_global_batch_type
 from tbsim.utils.trajdata_utils import set_global_trajdata_batch_env, set_global_trajdata_batch_raster_cfg
 
 
-def extract_irl_features_from_all_frames(env, policy, policy_model, scene_indices, start_frames, output_dir, 
-                                        horizon=50, num_sim_per_scene=1, num_rollouts=10, filter_dynamic=False,
-                                        min_velocity_threshold=2.0, debug=False):
+def extract_irl_features_from_all_frames(env, policy, policy_model, config):
     """
     Extract IRL features by generating rollouts from ALL frames, not just start frame
     Args:
         env: Environment instance
         policy: Policy for rollouts
         policy_model: Policy model
-        scene_indices: List of scene indices
-        start_frames: List of starting frame indices (can be None for automatic determination)
-        output_dir: Output directory
-        horizon:  fixed horizon to generate rollout
-        num_sim_per_scene: Number of simulations per scene
-        num_rollouts: Number of rollouts to generate per frame
-        filter_dynamic: Filter for dynamic agents only
-        min_velocity_threshold: Minimum velocity threshold for dynamic agents
-        debug: Enable debug mode for plotting rollouts and ground truth
+        config: Configuration object defined in irl_config.py
     """
     print("Extracting IRL features from ALL frames...")
     
     all_features = {}
+    scene_i = 0
+    eval_scenes = config.eval_scenes
     
-    # Reset environment to get scene information
-    scenes_valid = env.reset(scene_indices=scene_indices, start_frame_index=None)
-    scene_indices = [si for si, sval in zip(scene_indices, scenes_valid) if sval]
-    
-    if len(scene_indices) == 0:
-        print('No valid scenes, skipping...')
-        return all_features
-    
-    print(f"Valid scenes after reset: {scene_indices}")
-
-    # Automatically determine start frames
-    if not start_frames or num_sim_per_scene > 1:
-        start_frame_index = []
+    while scene_i < config.num_scenes_to_evaluate:
+        scene_indices = eval_scenes[scene_i: scene_i + config.num_scenes_per_batch]
+        scene_i += config.num_scenes_per_batch
+        print(f'Processing scene_indices: {scene_indices}')
         
+        # Reset environment to get scene information
+        scenes_valid = env.reset(scene_indices=scene_indices, start_frame_index=None)
+        scene_indices = [si for si, sval in zip(scene_indices, scenes_valid) if sval]
+        
+        if len(scene_indices) == 0:
+            print('No valid scenes in this batch, skipping...')
+            torch.cuda.empty_cache()
+            continue
+    
+        # Determine start frames for each scene
+        start_frame_index: list[list[int]] = []
+        valid_scene_indices = []
+        valid_scene_wrappers = [] 
+        
+        # History frames needed by policy
+        history_frames = getattr(env.exp_config.algo, "history_num_frames", 0)
+        
+        # Multiple sims per scene: spread starts across valid range            
         for si_idx, scene_idx in enumerate(scene_indices):
             print(f"Processing scene {scene_idx} (index {si_idx})")
-            if hasattr(env, '_current_scenes') and len(env._current_scenes) > si_idx:
-                current_scene = env._current_scenes[si_idx].scene
-                
-                # Get history frames from environment config
-                history_frames = getattr(env, '_history_num_frames', 10)  # default fallback
-                if hasattr(env, 'exp_config') and hasattr(env.exp_config, 'algo'):
-                    history_frames = env.exp_config.algo.history_num_frames
-                
-                sframe = history_frames + 1
-                # Ensure there's enough horizon for rollout
-                eframe = current_scene.length_timesteps - horizon
-                
-                if eframe <= sframe:
-                    print(f"Scene {scene_idx}: insufficient length (length={current_scene.length_timesteps}, need at least {sframe + horizon})")
-                    continue
-                
-                if num_sim_per_scene > 1:
-                    # Multiple simulations per scene - spread them across the scene
-                    scene_frame_inds = np.linspace(sframe, eframe, num=num_sim_per_scene, dtype=int).tolist()
-                else:
-                    # Single simulation - use default start frame
-                    scene_frame_inds = [sframe]
-                    
+            
+            current_scene = env._current_scenes[si_idx].scene
+            sframe = history_frames + 1
+            # Ensure there's enough horizon for rollout
+            eframe = current_scene.length_timesteps - config.horizon
+            if eframe <= sframe:
+                print(f"Scene {scene_idx}: insufficient length (length={current_scene.length_timesteps}, need at least {sframe + config.horizon})")
+                continue
+            valid_scene_indices.append(scene_idx)
+            valid_scene_wrappers.append(env._current_scenes[si_idx]) 
+            
+            if config.num_sim_per_scene > 1:            
+                # Multiple simulations per scene - spread them across the scene                    
+                scene_frame_inds = np.linspace(sframe, eframe, num=config.num_sim_per_scene, dtype=int).tolist()
                 start_frame_index.append(scene_frame_inds)
-                print(f"Scene {scene_idx}: frames {sframe} to {eframe}, selected starts: {scene_frame_inds}")
+                print(f"Scene {scene_idx}: frames {sframe} to {eframe}, selected starts: {scene_frame_inds}")          
             else:
-                # Fallback if scene info not available
-                print(f"Scene {scene_idx}: using fallback start frame")
-                start_frame_index.append([horizon])
+                # Single sim per scene: default start
+                start_frame_index.append([sframe])
+                print(f"Scene {scene_idx}: using start frame {sframe}")
                 
-        print(f'Automatically determined starting frames: {start_frame_index}')        
-    else:
-        # Use provided start_frames, but format as nested list for consistency
-        print(f"Using provided start frames: {start_frames}")
-        start_frame_index = [[sf] for sf in start_frames]
-
-    # Process each scene with its determined start frames
-    for si_idx, scene_idx in enumerate(scene_indices):
-        scene_features = []    
-        scene_start_frames = start_frame_index[si_idx]
-        scene_name = env._current_scenes[0].scene.name 
+        # Update scene_indices to only include valid scenes
+        scene_indices = valid_scene_indices
+        env._current_scenes = valid_scene_wrappers
         
-        for start_frame in scene_start_frames:
-            print(f"\nProcessing scene {scene_idx}, start frame {start_frame}")
-            
-            # Reset to this specific scene and start frame
-            scenes_valid = env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
-            if not scenes_valid[0]:
-                print(f"Scene {scene_idx} invalid at start frame {start_frame}, skipping...")
-                continue
+        # Now scene_indices and start_frame_index have the same length
+        assert len(scene_indices) == len(start_frame_index), f"Mismatch: {len(scene_indices)} scenes vs {len(start_frame_index)} start_frame entries"
+                  
+        # Process each scene with its determined start frames
+        for si_idx, scene_idx in enumerate(scene_indices):
+            scene_features = []    
+            scene_start_frames = start_frame_index[si_idx]
+            scene_name = env._current_scenes[si_idx].scene.name 
 
-            # Generate rollouts starting from this specific frame
-            rollout_trajectories, gt_trajectories = generate_rollouts_from_specific_frame(
-                env, policy, policy_model, scene_idx, start_frame, 
-                num_rollouts=num_rollouts, horizon=horizon
-            )
+            for start_frame in scene_start_frames:
+                print(f"\nProcessing scene {scene_idx}, start frame {start_frame}")
+                
+                # Reset to this specific scene and start frame
+                scenes_valid = env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
+                if not scenes_valid[0]:
+                    print(f"Scene {scene_idx} invalid at start frame {start_frame}, skipping...")
+                    torch.cuda.empty_cache()
+                    continue
 
-            if not rollout_trajectories or gt_trajectories is None:
-                print(f"    Warning: No data generated for frame {start_frame}")
-                continue
-                        
-            frame_features_data = process_frame_trajectories(
-                scene_idx, scene_name, start_frame, rollout_trajectories, gt_trajectories, 
-                filter_dynamic=filter_dynamic, min_velocity_threshold=2.0, debug=debug
-            )
-            
-            if frame_features_data:
-                scene_features.append({
-                    "start_frame": start_frame,
-                    "frame_features": frame_features_data
-                })
+                # Generate rollouts starting from this specific frame
+                rollout_trajectories, gt_trajectories = generate_rollouts_from_specific_frame(
+                    env, policy, policy_model, scene_idx, start_frame, 
+                    num_rollouts=config.num_rollouts, horizon=config.horizon
+                )
 
-        # Save features for current scene
-        if scene_features:            
-            output_path = os.path.join(output_dir, f"{scene_name}_irl_features.pkl")
-            with open(output_path, 'wb') as f:
-                pickle.dump(scene_features, f)
+                if not rollout_trajectories or gt_trajectories is None:
+                    print(f"    Warning: No data generated for frame {start_frame}")
+                    torch.cuda.empty_cache()
+                    continue
+                            
+                frame_features_data = process_frame_trajectories(
+                    scene_idx, scene_name, start_frame, rollout_trajectories, gt_trajectories, 
+                    filter_dynamic=config.filter_dynamic, 
+                    min_velocity_threshold=config.min_velocity_threshold,
+                    debug=config.debug
+                )
+                
+                if frame_features_data:
+                    scene_features.append({
+                        "start_frame": start_frame,
+                        "frame_features": frame_features_data
+                    })
 
-            print(f"Saved {len(scene_features)} frame features to {output_path}")
-            all_features[f"{scene_idx}"] = scene_features
+            # Save features for current scene
+            if scene_features:            
+                output_path = os.path.join(config.output_dir, f"{scene_name}_irl_features.pkl")
+                with open(output_path, 'wb') as f:
+                    pickle.dump(scene_features, f)
 
+                print(f"Saved {len(scene_features)} frame features to {output_path}")
+                all_features[f"{scene_idx}"] = scene_features
+                
+        torch.cuda.empty_cache()
     return all_features
 
 
-def generate_rollouts_from_specific_frame(env, policy, policy_model, scene_idx, start_frame, 
-                                        num_rollouts=10, horizon=50, 
+def generate_rollouts_from_specific_frame(env, policy, policy_model, scene_idx, 
+                                          start_frame, num_rollouts=10, horizon=50, 
                                         filter_dynamic=False, min_velocity_threshold=2.0):
     """
     Generate multiple rollouts starting from a SPECIFIC frame
     """
     # Step 1: Extract ground truth trajectory
     print(f"    Step 1: Extracting ground truth trajectory for scene {scene_idx}, frame {start_frame}")
-    ground_truth = extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon)
+    ground_truth = extract_ground_truth_trajectory(env, start_frame, horizon)
 
     if ground_truth is None or len(ground_truth) == 0:
         print(f"    No dynamic agents found in ground truth, skipping rollouts")
@@ -362,15 +361,9 @@ def extract_trajectories_from_rollouts(rollouts):
 
     return agents_trajectories_all_rollouts
 
-def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon):
+def extract_ground_truth_trajectory(env, start_frame, horizon):
     """
-    Extract ground truth for the current scene and start frame
-    
-    Args:
-        env: Environment instance
-        scene_idx: Scene index
-        start_frame: Starting frame
-        horizon: Number of frames
+    Extract ground truth from cached trajdata
     """
     try:      
         if not (hasattr(env, '_current_scenes') and len(env._current_scenes) > 0):
@@ -401,11 +394,7 @@ def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon):
                     continue
                     
                 # Use the dataset's method to get agent states
-                if hasattr(current_scene, 'cache'):
-                    states = current_scene.cache.get_states([agent_name], frame_idx)
-                else:
-                    # Fallback: try dataset directly
-                    states = current_scene.dataset.get_states([agent_name], frame_idx)
+                states = current_scene.cache.get_states([agent_name], frame_idx)
                 
                 # Process valid states
                 if states is not None and hasattr(states, '__len__') and len(states) > 0:
@@ -433,7 +422,7 @@ def extract_ground_truth_trajectory(env, scene_idx, start_frame, horizon):
         return gt_trajectories
         
     except Exception as e:
-        print(f"      Error using dataset get_states: {e}")
+        print(f"      Error extracting GT from cache: {e}")
         return None
 
 def process_frame_trajectories(scene_idx, scene_name, frame_number, rollout_trajectories, ground_truth, 
@@ -466,8 +455,7 @@ def process_frame_trajectories(scene_idx, scene_name, frame_number, rollout_traj
     dynamic_gt_features = compute_irl_features(ground_truth, dynamic_agent_ids, dt=0.1)
         
     # Add visualization at the end if debug is enabled
-    if debug:
-        from visualize_rollout_gt import visualize_guided_rollout_with_gt
+    if debug:        
         plot_output_dir = os.path.join("irl_features_output", "visualization")
         
         try:
@@ -768,15 +756,7 @@ if __name__ == "__main__":
         print("Starting feature extraction...")
         features = extract_irl_features_from_all_frames(
             env, policy, policy_model, 
-            default_config.scene_indices, 
-            default_config.start_frames, 
-            default_config.output_dir, 
-            default_config.horizon,
-            default_config.num_sim_per_scene,
-            default_config.num_rollouts,
-            default_config.filter_dynamic,
-            default_config.min_velocity_threshold,
-            default_config.debug
+            default_config
         )
         
         print("Feature extraction from all frames complete!")
