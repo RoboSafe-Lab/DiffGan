@@ -2082,6 +2082,83 @@ class StayAwayLoss(GuidanceLoss):
         return dist_loss
 
 
+class LearnedRewardGuidance(GuidanceLoss):
+    def __init__(self, weight=1.0, reward_weights=None, feature_names=None, dt=0.1):
+        super().__init__()
+        self.weight = weight
+        self.reward_weights = torch.tensor(reward_weights) if reward_weights else None
+        self.feature_names = feature_names or ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'thw_front', 'thw_rear']
+        self.dt = dt
+
+    def forward(self, x, data_batch, agt_mask=None):
+        if self.reward_weights is None:
+            # Return zero loss if no weights learned yet
+            return torch.zeros((x.size(0), x.size(1)), device=x.device)
+    
+        # Extract features from trajectory and compute reward
+        features = self._extract_basic_features(x, self.dt, self.feature_names)
+        
+        # Validate feature dimensions
+        if features.size(-1) != len(self.reward_weights):
+            print(f"Warning: Feature dimension mismatch. Got {features.size(-1)}, expected {len(self.reward_weights)}")
+            return torch.zeros((x.size(0), x.size(1)), device=x.device)        
+            
+        # Compute reward as weighted sum of features
+        reward = torch.sum(features * self.reward_weights.to(x.device), dim=-1)
+        
+        if torch.isnan(reward).any():
+            print("Warning: NaN rewards detected!")
+            reward = torch.nan_to_num(reward, 0.0)
+        
+        # Return negative reward as loss (guidance minimizes loss)
+        return -reward.unsqueeze(1).expand(-1, x.size(1))
+
+    def _extract_basic_features(self, x, dt, feature_names):
+        B, N, T, _ = x.shape
+        features = []
+        
+        # Extract basic trajectory components
+        pos = x[..., :2]  # [B, N, T, 2]
+        vel_mag = x[..., 2]  # [B, N, T]
+        yaw = x[..., 3]  # [B, N, T]
+        
+        if len(x.shape) > 4 and x.shape[-1] > 4:
+            acc = x[..., 4]  # [B, N, T] if available
+        else:
+            # Compute acceleration from velocity
+            acc = torch.diff(vel_mag, dim=-1, prepend=vel_mag[..., :1]) / dt
+        
+        # 1. Velocity feature (mean over time)
+        if 'velocity' in feature_names:
+            features.append(torch.mean(vel_mag, dim=-1))  # [B, N]
+        
+        # 2. Longitudinal acceleration (mean over time)
+        if 'a_long' in feature_names:
+            features.append(torch.mean(acc, dim=-1))
+        
+        # 3. Longitudinal jerk (derivative of acceleration)
+        if 'jerk_long' in feature_names:
+            jerk = torch.diff(acc, dim=-1, prepend=acc[..., :1]) / dt
+            features.append(torch.mean(jerk, dim=-1))
+        
+        # 4. Lateral acceleration (simplified approximation)
+        if 'a_lateral' in feature_names:
+            # Approximate lateral acceleration from yaw rate and velocity
+            yaw_rate = torch.diff(yaw, dim=-1, prepend=yaw[..., :1]) / dt
+            a_lat = vel_mag * yaw_rate
+            features.append(torch.mean(torch.abs(a_lat), dim=-1))
+        
+        # 5. Time headway features (simplified - would need other agent positions for real implementation)
+        if 'thw_front' in feature_names:
+            # Placeholder - would need inter-agent distance calculations
+            features.append(torch.ones(B, N, device=x.device) * 3.0)  # Default safe headway
+        
+        if 'thw_rear' in feature_names:
+            # Placeholder - would need inter-agent distance calculations  
+            features.append(torch.ones(B, N, device=x.device) * 3.0)  # Default safe headway
+        
+        return torch.stack(features, dim=-1)  # [B, N, num_features]
+
 ############## GUIDANCE utilities ########################
 
 GUIDANCE_FUNC_MAP = {
@@ -2101,6 +2178,7 @@ GUIDANCE_FUNC_MAP = {
     'gpt': GPTLoss,
     'gptcollision': CollisionLoss,
     'gptkeepdistance': KeepDistanceLoss,
+    'learned_reward_guidance': LearnedRewardGuidance,
 }
 
 class DiffuserGuidance(object):

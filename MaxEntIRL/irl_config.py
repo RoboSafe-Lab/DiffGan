@@ -13,6 +13,7 @@ class FeatureExtractionConfig:
     
     # Output settings
     output_dir: str = "irl_features_output"
+    save_features: bool = True
     
     # Scene selection
     # scene_indices: List[int] = field(default_factory=lambda: [0]) # Default to first scene
@@ -62,6 +63,14 @@ class FeatureExtractionConfig:
            
         # Ensure output directory exists
         os.makedirs(self.output_dir, exist_ok=True)
+
+    ############### Parameters for adversarial training
+
+    # Number of training iterations
+    num_iterations: int = 100
+
+    # Skip the last n scenes for evaluation
+    skip_num_scenes: int = 5
 
 # Default configuration instance
 default_config = FeatureExtractionConfig()

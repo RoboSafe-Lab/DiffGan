@@ -780,6 +780,19 @@ def heuristic_gptkeepdistance(sim_scene, dt, min_distance, max_distance, **kwarg
     return guide_config
 
 
+def heuristic_learned_reward_guidance(sim_scene, dt, reward_weights, feature_names, **kwargs):
+    """Apply learned reward as guidance"""
+    guide_config = {
+        'name': 'learned_reward_guidance',
+        'params': {
+            'reward_weights': reward_weights,
+            'feature_names': feature_names,
+            'dt': dt
+        },
+        'agents': None,
+    }
+    return guide_config
+        
 
 
 
@@ -804,6 +817,7 @@ HEURISTIC_FUNC = {
 
     'gptcollision' : heuristic_gptcollision,
     'gptkeepdistance' : heuristic_gptkeepdistance,
+    'learned_reward_guidance' : heuristic_learned_reward_guidance,
 }
 
 def compute_heuristic_guidance(heuristic_config, env, scene_indices, start_frames, example_batch=None):

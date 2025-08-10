@@ -122,7 +122,7 @@ def extract_irl_features_from_all_frames(env, policy, policy_model, config):
                     })
 
             # Save features for current scene
-            if scene_features:            
+            if config.save_features and scene_features:            
                 output_path = os.path.join(config.output_dir, f"{scene_name}_irl_features.pkl")
                 with open(output_path, 'wb') as f:
                     pickle.dump(scene_features, f)
@@ -212,18 +212,16 @@ def generate_single_rollout_from_frame(env, policy, policy_model, scene_idx, sta
         eval_cfg = getattr(env, 'eval_cfg', None)  # Add this to your setup function
         
         if eval_cfg is not None:
-            # Determine guidance based on editing source like scene_editor.py
-            heuristic_config = None
+            # Determine guidance based on editing source
+            heuristic_config = []
             
             if hasattr(eval_cfg, 'edits') and hasattr(eval_cfg.edits, 'editing_source'):
                 if "heuristic" in eval_cfg.edits.editing_source:
                     # Use heuristic config
                     if eval_cfg.edits.heuristic_config is not None:
                         heuristic_config = eval_cfg.edits.heuristic_config
-                    else:
-                        heuristic_config = []
                 
-                # Getting edits from either config file or heuristics like scene_editor.py lines 189-235
+                # Getting edits from either config file or heuristics
                 if "config" in eval_cfg.edits.editing_source:
                     guidance_config = eval_cfg.edits.guidance_config
                     constraint_config = eval_cfg.edits.constraint_config  
