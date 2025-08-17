@@ -1,198 +1,207 @@
-import numpy as np
 import os
 import pickle
-
-def load_features():
-    """Load features from the specified directory."""
-    feature_dir = "irl_features_output"
-    if not os.path.exists(feature_dir):
-        raise FileNotFoundError(f"Feature directory {feature_dir} does not exist.")
-    
-    features = []
-    for filename in os.listdir(feature_dir):
-        if filename.endswith(".pkl") and not os.path.isdir(os.path.join(feature_dir, filename)):
-            filepath = os.path.join(feature_dir, filename)
-            with open(filepath, "rb") as f:
-                features.append(pickle.load(f))
-    
-    return features
+import numpy as np
+from typing import List, Dict, Any, Tuple, Optional
+from irl_config import default_config
 
 
-def convert_features_to_array(features, feature_names=['velocity', 'a_long', 'jerk_long', 'a_lateral', 'thw_front', 'thw_rear']):
-    """
-    Convert feature dictionary to numpy array by aggregating time-series features.
-    
-    Args:
-        features: Dictionary with feature names as keys and arrays as values, or numpy array
-        feature_names: List of feature names in the desired order
-        
-    Returns:
-        numpy array of aggregated feature values
-    """
-    if isinstance(features, dict):
-        feature_values = []
-        
-        # Extract and aggregate each feature type (take mean across time steps)
-        for feature_name in feature_names:
-            feature_array = np.array(features[feature_name])
-            if len(feature_array) > 0:
-                # Take mean to get single value per feature
-                feature_values.append(np.mean(feature_array))
-        
-        return np.array(feature_values)
-    else:
-        return np.array(features)
+class MaxEntIRL:
+    def __init__(
+        self,
+        feature_names: Optional[List[str]] = None,
+        n_iters: int = 200,
+        lr: float = 0.05,
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        eps: float = 1e-8,
+        lam: float = 0.01,
+        seed: int = 42,
+    ):
+        # Use feature names from config when not provided
+        self.feature_names = feature_names if feature_names is not None else default_config.feature_names
+        self.feature_num = len(self.feature_names)
 
-def maxent_irl(features):
-    """
-    Maximum Entropy Inverse Reinforcement Learning
-    
-    Args:
-        features: List of loaded feature data from pkl files
-    """
-    # Parameters for IRL    
-    feature_num = 6  # Updated to match actual feature count
-    n_iters = 200
-    beta1 = 0.9
-    beta2 = 0.999
-    eps = 1e-8
-    lam = 0.01
-    lr = 0.05
-    
-    # Initialize Adam optimizer variables
-    pm = None
-    pv = None    
-    
-    training_log = {'iteration': [], 'average_feature_difference': [],
-                    'average_log-likelihood': [],
-                    'average_human_likeness': [],
-                    'theta': []}
-    
-    # Initialize weights
-    theta = np.random.normal(0, 0.05, size=feature_num)
-    
-    for i in range(n_iters):
-        print(f'iteration: {i + 1}/{n_iters}')
+        self.n_iters = n_iters
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.lam = lam
 
-        feature_exp = np.zeros([feature_num])
-        human_feature_exp = np.zeros([feature_num])
-        log_like_list = []
-        iteration_human_likeness = []
-        num_traj = 0
+        self.theta = np.random.RandomState(seed).normal(0, 0.05, size=self.feature_num)
 
-        # compute on each scene
-        for scene_idx, scene_data in enumerate(features):
-            # compute on each frame
-            for frame_data in scene_data:
-                start_frame = frame_data["start_frame"]
-                frame_features = frame_data["frame_features"]
-                
-                agent_rollout_features = frame_features['agent_rollout_features']
-                agent_ground_truth_features = frame_features['agent_ground_truth_features']
-                               
-                # Process each agent
-                for agent_id, gt_features in agent_ground_truth_features.items():
-                    if agent_id not in agent_rollout_features:
-                        continue
-                    
-                    # Get the rollout features for the current agent
-                    rollout_features = agent_rollout_features[agent_id]
-                    
-                    # Collect trajectories for this agent
-                    agent_trajs = []
-                    
-                    # Process each rollout trajectory
-                    for rollout_traj in rollout_features:
-                        # Convert feature dict to array
-                        rollout_array = convert_features_to_array(rollout_traj)
-                        
-                        # Compute the reward for this trajectory
-                        reward = np.dot(rollout_array, theta)
+    @staticmethod
+    def load_features(feature_dir: str) -> List[Any]:
+        if not os.path.exists(feature_dir):
+            raise FileNotFoundError(f"Feature directory {feature_dir} does not exist.")
+        features = []
+        for filename in os.listdir(feature_dir):
+            path = os.path.join(feature_dir, filename)
+            if filename.endswith(".pkl") and os.path.isfile(path):
+                with open(path, "rb") as f:
+                    features.append(pickle.load(f))
+        return features
 
-                        # Store trajectory info: (reward, features)
-                        agent_trajs.append((reward, rollout_array))
+    def convert_features_to_array(self, features: Any) -> np.ndarray:
+        """
+        Convert a feature dict (time-series) to a fixed-length vector in self.feature_names order.
+        Aggregation = mean over time. Missing features -> 0.
+        """
+        if isinstance(features, dict):
+            vals = []
+            for name in self.feature_names:
+                if name in features:
+                    arr = np.asarray(features[name])
+                    vals.append(float(np.mean(arr)) if arr.size > 0 else 0.0)
+                else:
+                    vals.append(0.0)
+            return np.array(vals, dtype=float)
+        # Already a numeric vector
+        return np.asarray(features, dtype=float)
 
-                    
-                    # Convert ground truth features to array
-                    gt_array = convert_features_to_array(gt_features)
-                    
-                    # Add ground truth features as the "human" trajectory
-                    human_reward = np.dot(gt_array, theta)
-                    agent_trajs.append((human_reward, gt_array))
+    def _traj_reward(self, feat_vec: np.ndarray) -> float:
+        return float(np.dot(feat_vec, self.theta))
 
-                    if not agent_trajs:
-                        continue
-                
-                    num_traj += 1 # Count each expert trajectory as one demonstration
-                
-                # Calculate probability of each trajectory
-                rewards = [traj[0] for traj in agent_trajs]
-                # Prevent overflow by subtracting max reward
-                max_reward = np.max(rewards)
-                exp_rewards = np.exp(np.array(rewards) - max_reward)
-                probs = exp_rewards / np.sum(exp_rewards)
+    def fit(self, features: List[Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        features is the list loaded from pkl files:
+        [
+          [  # scene
+            {
+              "start_frame": int,
+              "frame_features": {
+                "agent_rollout_features": {agent_id: [feature_dict, ...], ...},
+                "agent_ground_truth_features": {agent_id: feature_dict, ...}
+              }
+            },
+            ...
+          ],
+          ...
+        ]
+        """
+        theta = self.theta.copy()
+        pm = None
+        pv = None
 
-                # Calculate feature expectation with respect to the policy
-                traj_features = np.array([traj[1] for traj in agent_trajs])
-                feature_exp += np.dot(probs, traj_features)
+        training_log = {
+            "iteration": [],
+            "average_feature_difference": [],
+            "average_log-likelihood": [],
+            "average_human_likeness": [],
+            "theta": [],
+        }
 
-                # Calculate likelihood of human trajectory (assuming last one is human)
-                log_like = np.log(probs[-1] + eps)  # Add small epsilon to prevent log(0)
-                log_like_list.append(log_like)
+        for it in range(self.n_iters):
+            print(f"iteration: {it + 1}/{self.n_iters}")
 
-                # Calculate human likeness for top trajectories
-                top_k = min(3, len(probs))
-                top_indices = np.argsort(probs)[-top_k:][::-1]
-                top_human_likeness = [np.linalg.norm(agent_trajs[idx][1] - gt_array) for idx in top_indices]
-                iteration_human_likeness.extend(top_human_likeness)
+            # Accumulators
+            feature_exp = np.zeros(self.feature_num, dtype=float)
+            human_feature_exp = np.zeros(self.feature_num, dtype=float)
+            log_like_list: List[float] = []
+            iteration_human_likeness: List[float] = []
+            num_demo_agents = 0
 
-                # Add human trajectory features to expectation
-                human_feature_exp += gt_array
+            # Iterate scenes -> frames -> agents
+            for scene_data in features:
+                for frame_data in scene_data:
+                    frame_features = frame_data["frame_features"]
+                    agent_rollout_features: Dict[Any, List[Dict[str, Any]]] = frame_features["agent_rollout_features"]
+                    agent_gt_features: Dict[Any, Dict[str, Any]] = frame_features["agent_ground_truth_features"]
 
-        if num_traj == 0:
-            print("No trajectories found in this iteration")
-            continue
+                    for agent_id, gt_features in agent_gt_features.items():
+                        if agent_id not in agent_rollout_features:
+                            continue
 
-        # Compute gradient
-        grad = human_feature_exp / num_traj - feature_exp / num_traj - 2 * lam * theta
-        grad = np.array(grad, dtype=float)
+                        # Prepare candidate trajectories for this agent: rollouts + expert
+                        agent_trajs: List[Tuple[float, np.ndarray]] = []
 
-        # Update weights using Adam optimization
-        if pm is None:
-            pm = np.zeros_like(grad)
-            pv = np.zeros_like(grad)
+                        # Rollouts
+                        for rollout_feat_dict in agent_rollout_features[agent_id]:
+                            r_vec = self.convert_features_to_array(rollout_feat_dict)
+                            r_rew = float(np.dot(r_vec, theta))
+                            agent_trajs.append((r_rew, r_vec))
 
-        pm = beta1 * pm + (1 - beta1) * grad
-        pv = beta2 * pv + (1 - beta2) * (grad * grad)
-        mhat = pm / (1 - beta1 ** (i + 1))
-        vhat = pv / (1 - beta2 ** (i + 1))
-        # Update theta with learning rate and Adam update
-        update_vec = mhat / (np.sqrt(vhat) + eps)
-        theta += lr * update_vec
+                        # Expert (ground truth)
+                        gt_vec = self.convert_features_to_array(gt_features)
+                        gt_rew = float(np.dot(gt_vec, theta))
+                        agent_trajs.append((gt_rew, gt_vec))
 
-        # Record info during training
-        training_log['iteration'].append(i + 1)
-        training_log['average_feature_difference'].append(
-            np.linalg.norm(human_feature_exp / num_traj - feature_exp / num_traj))
-        training_log['average_log-likelihood'].append(np.mean(log_like_list))
-        training_log['average_human_likeness'].append(np.mean(iteration_human_likeness))
-        training_log['theta'].append(theta.copy())
-        
-        # Print progress
-        if (i + 1) % 10 == 0:
-            print(f"Iteration {i+1}: Log-likelihood = {np.mean(log_like_list):.4f}")
-    
-    return theta, training_log
+                        if not agent_trajs:
+                            continue
+
+                        num_demo_agents += 1
+
+                        # Normalize rewards for numerical stability
+                        rewards = np.array([rw for rw, _ in agent_trajs], dtype=float)
+                        max_reward = np.max(rewards)
+                        exp_rewards = np.exp(rewards - max_reward)
+                        probs = exp_rewards / np.sum(exp_rewards)
+
+                        traj_features = np.stack([vec for _, vec in agent_trajs], axis=0)
+
+                        # Policy expectation and logs for this agent
+                        feature_exp += np.dot(probs, traj_features)
+                        log_like_list.append(np.log(probs[-1] + self.eps))
+
+                        # Human-likeness of top-k
+                        top_k = min(3, len(probs))
+                        top_idx = np.argsort(probs)[-top_k:][::-1]
+                        for idx in top_idx:
+                            iteration_human_likeness.append(float(np.linalg.norm(traj_features[idx] - gt_vec, ord=2)))
+
+                        # Expert feature expectation
+                        human_feature_exp += gt_vec
+
+            if num_demo_agents == 0:
+                print("No trajectories found in this iteration")
+                continue
+
+            # Gradient of (E_data - E_model) - 2*lam*theta
+            grad = (human_feature_exp - feature_exp) / num_demo_agents - 2.0 * self.lam * theta
+
+            # Adam update
+            if pm is None:
+                pm = np.zeros_like(grad)
+                pv = np.zeros_like(grad)
+            pm = self.beta1 * pm + (1 - self.beta1) * grad
+            pv = self.beta2 * pv + (1 - self.beta2) * (grad * grad)
+            mhat = pm / (1 - self.beta1 ** (it + 1))
+            vhat = pv / (1 - self.beta2 ** (it + 1))
+            theta += self.lr * (mhat / (np.sqrt(vhat) + self.eps))
+
+            # Log
+            training_log["iteration"].append(it + 1)
+            training_log["average_feature_difference"].append(
+                float(np.linalg.norm((human_feature_exp - feature_exp) / num_demo_agents))
+            )
+            training_log["average_log-likelihood"].append(float(np.mean(log_like_list)) if log_like_list else float("nan"))
+            training_log["average_human_likeness"].append(
+                float(np.mean(iteration_human_likeness)) if iteration_human_likeness else float("nan")
+            )
+            training_log["theta"].append(theta.copy())
+
+            if (it + 1) % 10 == 0:
+                print(f"Iteration {it + 1}: Log-likelihood = {training_log['average_log-likelihood'][-1]:.4f}")
+
+        self.theta = theta
+        return theta, training_log
+
+    @staticmethod
+    def save_results(theta: np.ndarray, training_log: Dict[str, Any], path: str = "irl_results.pkl") -> None:
+        with open(path, "wb") as f:
+            pickle.dump({"theta": theta, "training_log": training_log}, f)
+        print(f"Saved IRL results to {path}")
+
 
 if __name__ == "__main__":
-    # Load features from the specified directory
-    features = load_features()
-    
-    # Run the IRL process
-    learned_theta, log = maxent_irl(features=features)
-    
-    print(f"Final learned weights: {learned_theta}")
-    
-    # Save the results
-    with open("irl_results.pkl", "wb") as f:
-        pickle.dump({"theta": learned_theta, "training_log": log}, f)
+    # Load features from output dir in config
+    feature_dir = default_config.output_dir
+    features = MaxEntIRL.load_features(feature_dir)
+
+    # Use feature names from config so extractor/config control the set
+    irl = MaxEntIRL(feature_names=default_config.feature_names)
+
+    theta, log = irl.fit(features)
+    print(f"Final learned weights: {theta}")
+
+    MaxEntIRL.save_results(theta, log, path="irl_results.pkl")

@@ -2,14 +2,15 @@ import numpy as np
 import torch
 import pickle
 import os
-from extract_features import extract_irl_features_from_all_frames, setup_from_scene_editor_config
-from run_irl import maxent_irl, convert_features_to_array
+from extract_features import IRLFeatureExtractor
+from run_irl import MaxEntIRL
 from tbsim.configs.scene_edit_config import SceneEditingConfig
 from irl_config import default_config
 
 class AdversarialIRLDiffusion:
     def __init__(self, config):
         self.config = config
+        self.extractor: IRLFeatureExtractor | None = None
         self.env = None
         self.policy = None
         self.policy_model = None
@@ -18,11 +19,32 @@ class AdversarialIRLDiffusion:
         
     def setup_environment(self):
         """Setup environment and models"""
-        # Use your existing setup
-        cfg = SceneEditingConfig(registered_name=self.config.registered_name)
-        # Configure as needed...
-        
-        self.env, self.policy, self.policy_model = setup_from_scene_editor_config(cfg)
+        # Build SceneEditingConfig similarly to extract_features.__main__
+        cfg = SceneEditingConfig(registered_name="trajdata_nusc_diff")
+        # Apply CLI-like overrides from default_config
+        if hasattr(self.config, "eval_class"):
+            cfg.eval_class = self.config.eval_class
+        if hasattr(self.config, "env"):
+            cfg.env = self.config.env
+        # editing source (optional)
+        if hasattr(cfg, "edits") and hasattr(cfg.edits, "editing_source"):
+            if not isinstance(cfg.edits.editing_source, list):
+                cfg.edits.editing_source = [cfg.edits.editing_source]
+        # Hoist env-specific entries
+        for k in cfg[cfg.env]:
+            cfg[k] = cfg[cfg.env][k]
+        cfg.pop("nusc", None)
+        cfg.pop("trajdata", None)
+        # Checkpoint paths and output dir
+        cfg.ckpt.policy.ckpt_dir = self.config.policy_ckpt_dir
+        cfg.ckpt.policy.ckpt_key = self.config.policy_ckpt_key
+        cfg.results_dir = self.config.output_dir
+
+        # Create extractor (holds env/policy/model)
+        self.extractor = IRLFeatureExtractor(cfg, self.config)
+        self.env = self.extractor.env
+        self.policy = self.extractor.policy
+        self.policy_model = self.extractor.policy_model
         print("Environment and models setup complete")
     
     def train_adversarial(self, num_iterations=10):
@@ -52,25 +74,24 @@ class AdversarialIRLDiffusion:
     def generate_trajectories_with_current_model(self):
         """Generate trajectories using current diffusion model state"""
         print("Generating trajectories with current diffusion model...")
-        
-        # Extract features using current model
-        features = extract_irl_features_from_all_frames(
-            self.env, self.policy, self.policy_model, self.config
-        )
-        
+
+        if self.extractor is None:
+            raise RuntimeError("Extractor is not initialized. Call setup_environment() first.")
+        # Extract features using current extractor (env, policy, model inside)
+        features = self.extractor.extract_irl_features_from_all_frames()
         return features
-    
+
     def get_reward_via_irl(self, generated_features):
         """Update reward function using MaxEnt IRL (Discriminator step)"""
         print("Updating reward function using MaxEnt IRL...")        
         
         # Run MaxEnt IRL to learn reward
         features_list = list(generated_features.values())
-        learned_theta, training_log = maxent_irl(features_list)
-
+        irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations)
+        learned_theta, training_log = irl.fit(features_list)
         print(f"Learned reward weights: {learned_theta}")
         return learned_theta
-    
+
     def update_diffusion_model_with_reward(self):
         """Update diffusion model using learned reward as guidance (Generator step)"""
         print("Updating diffusion model with learned reward guidance...")
@@ -87,7 +108,7 @@ class AdversarialIRLDiffusion:
             return None        
         
         # Define feature names to match your IRL features
-        feature_names = ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'thw_front', 'thw_rear']
+        feature_names = self.config.feature_names
                
         # Create custom guidance based on learned reward
         reward_guidance = {
@@ -96,7 +117,7 @@ class AdversarialIRLDiffusion:
             'params': {
                 'reward_weights': self.current_theta.tolist(), 
                 'feature_names': feature_names,
-                'dt': 0.1
+                'dt': self.config.step_time
             },
             'agents': None  # Apply to all agents
         }
@@ -109,18 +130,20 @@ class AdversarialIRLDiffusion:
         if reward_guidance is None:
             print("No reward guidance to apply")
             return
-            
-        # Update the policy's guidance configuration
-        if hasattr(self.policy, 'guidance_config'):
-            if not isinstance(self.policy.guidance_config, list):
-                self.policy.guidance_config = [self.policy.guidance_config]
-            
-            # Add or update the learned reward guidance
-            self.policy.guidance_config.append(reward_guidance)
-        else:
-            self.policy.guidance_config = [reward_guidance]
         
-        print(f"Applied reward guidance with weights: {reward_guidance['params']['reward_weights']}")
+        # Attach to eval_cfg so extractor’s guided_rollout picks it up
+        if self.env is not None and hasattr(self.env, "eval_cfg"):
+            eval_cfg = self.env.eval_cfg
+            if hasattr(eval_cfg, "edits"):
+                if getattr(eval_cfg, "apply_guidance", None) is False:
+                    eval_cfg.apply_guidance = True
+                if not hasattr(eval_cfg.edits, "guidance_config") or eval_cfg.edits.guidance_config is None:
+                    eval_cfg.edits.guidance_config = []
+                if not isinstance(eval_cfg.edits.guidance_config, list):
+                    eval_cfg.edits.guidance_config = [eval_cfg.edits.guidance_config]
+                eval_cfg.edits.guidance_config.append(reward_guidance)
+                print(f"Applied reward guidance with weights: {reward_guidance['params']['reward_weights']}")
+                return
 
     
     def evaluate_iteration(self, iteration):

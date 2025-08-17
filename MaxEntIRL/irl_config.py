@@ -15,6 +15,10 @@ class FeatureExtractionConfig:
     output_dir: str = "irl_features_output"
     save_features: bool = True
     
+    # feature names
+    feature_names: List[str] = field(default_factory=lambda: 
+        ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'min_dis'])
+    
     # Scene selection
     # scene_indices: List[int] = field(default_factory=lambda: [0]) # Default to first scene
    
@@ -27,7 +31,8 @@ class FeatureExtractionConfig:
     
     filter_dynamic: bool = True  # Filter for dynamic agents only    
     min_velocity_threshold: float = 2.0 # Minimum velocity threshold for filtering agents
-    
+    min_distance_threshold: float = 5.0  # Minimum distance threshold for filtering agents
+
     # Feature extraction parameters
     num_rollouts: int = 8
     horizon: int = 50 # Fixed horizon for generating rollouts
@@ -66,7 +71,7 @@ class FeatureExtractionConfig:
 
     ############### Parameters for adversarial training
 
-    # Number of training iterations
+    # Number of training iterations of IRL
     num_iterations: int = 100
 
     # Skip the last n scenes for evaluation
