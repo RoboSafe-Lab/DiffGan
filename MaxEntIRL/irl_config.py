@@ -71,7 +71,7 @@ class FeatureExtractionConfig:
 
     ############### Parameters for adversarial training
 
-    # Number of training iterations of IRL
+    # Number of training iterations of DiffusionGan
     num_iterations: int = 100
 
     # Skip the last n scenes for evaluation

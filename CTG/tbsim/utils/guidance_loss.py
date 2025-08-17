@@ -2100,10 +2100,7 @@ class LearnedRewardGuidance(GuidanceLoss):
             return torch.zeros((x.size(0), x.size(1)), device=x.device)
     
         # Optional mask to select subset of agents
-        if agt_mask is not None:
-            x_masked = x[agt_mask]
-        else:
-            x_masked = x
+        x_masked = x[agt_mask] if agt_mask is not None else x
     
         # Compute features in torch aligned with extractor (mean over time)
         feats = self._extract_basic_features(x_masked, self.dt, self.feature_names)  # [B' , N, F]

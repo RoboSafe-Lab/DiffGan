@@ -67,8 +67,8 @@ class AdversarialIRLDiffusion:
                 self.update_diffusion_model_with_reward()
             
             # Step 4: Evaluate and log progress
-            self.evaluate_iteration(iteration)
-            
+            self.evaluate_iteration(generated_features, iteration)
+
         return self.current_theta, self.training_history
     
     def generate_trajectories_with_current_model(self):
@@ -145,8 +145,8 @@ class AdversarialIRLDiffusion:
                 print(f"Applied reward guidance with weights: {reward_guidance['params']['reward_weights']}")
                 return
 
-    
-    def evaluate_iteration(self, iteration):
+
+    def evaluate_iteration(self, generated_features, iteration):
         """Evaluate progress and log results"""
         # Compute metrics to track training progress
         metrics = {
@@ -156,7 +156,7 @@ class AdversarialIRLDiffusion:
         }
         
         # Add trajectory quality metrics if available
-        quality_metrics = self.compute_trajectory_quality_metrics()
+        quality_metrics = self.compute_trajectory_quality_metrics(generated_features)
         metrics.update(quality_metrics)
         
         self.training_history.append(metrics)
@@ -165,19 +165,97 @@ class AdversarialIRLDiffusion:
         self.save_checkpoint(iteration)
         
         print(f"Iteration {iteration} metrics: {metrics}")
-    
-    def compute_trajectory_quality_metrics(self):
-        """Compute metrics to evaluate trajectory quality"""
-        # Implement metrics like:
-        # - Collision rate
-        # - Off-road rate  
-        # - Similarity to expert trajectories
-        # - Diversity of generated trajectories
+
+    def compute_trajectory_quality_metrics(self, generated_features):
+         """
+        Compute metrics directly from generated feature dictionaries (no persistent state).
+        Derives:
+          - collision_rate: fraction of agent-time steps with min_dis < threshold
+          - rollout_collision_rate: fraction of rollouts with any collision
+          - expert_similarity: mean min L2 distance (feature space) to GT across agents
+          - diversity: avg pairwise L2 distance between rollout feature vectors
+        """
+        if not generated_features:
+            return {
+                'collision_rate': 0.0,
+                'rollout_collision_rate': 0.0,
+                'expert_similarity': 0.0,
+                'diversity': 0.0,
+            }
+
+        threshold = getattr(self.config, "collision_threshold", 2.0)
+
+        total_agent_time = 0
+        total_collisions = 0
+        rollouts_with_collision = 0
+        total_rollouts = 0
+
+        expert_dists = []
+        diversity_dists = []
+
+        feat_names = self.config.feature_names
+
+        for scene_entries in generated_features.values():
+            for frame_entry in scene_entries:
+                ff = frame_entry.get("frame_features", {})
+                agent_rollout = ff.get("agent_rollout_features", {})
+                agent_gt = ff.get("agent_ground_truth_features", {})
+
+                # Collision metrics from min_dis
+                for agent_id, rollout_feat_list in agent_rollout.items():
+                    if not rollout_feat_list:
+                        continue
+                    total_rollouts += 1
+                    any_collision_this_rollout = False
+
+                    for feat_dict in rollout_feat_list:
+                        if 'min_dis' in feat_dict:
+                            md = np.asarray(feat_dict['min_dis'])
+                            if md.size == 0:
+                                continue
+                            coll_steps = int(np.sum(md < threshold))
+                            total_collisions += coll_steps
+                            total_agent_time += int(md.size)
+                            if coll_steps > 0:
+                                any_collision_this_rollout = True
+                    if any_collision_this_rollout:
+                        rollouts_with_collision += 1
+
+                # Expert similarity and diversity (feature-space)
+                for agent_id, rollout_feat_list in agent_rollout.items():
+                    gt_feat = agent_gt.get(agent_id)
+                    rollout_vecs = [self._feature_dict_to_vec(fd, feat_names) for fd in rollout_feat_list]
+
+                    if gt_feat is not None and rollout_vecs:
+                        gt_vec = self._feature_dict_to_vec(gt_feat, feat_names)
+                        dists = [float(np.linalg.norm(rv - gt_vec)) for rv in rollout_vecs]
+                        expert_dists.append(np.min(dists))
+
+                    if len(rollout_vecs) >= 2:
+                        R = len(rollout_vecs)
+                        for i in range(R):
+                            for j in range(i + 1, R):
+                                diversity_dists.append(float(np.linalg.norm(rollout_vecs[i] - rollout_vecs[j])))
+
+        collision_rate = (total_collisions / total_agent_time) if total_agent_time > 0 else 0.0
+        rollout_collision_rate = (rollouts_with_collision / total_rollouts) if total_rollouts > 0 else 0.0
+        expert_similarity = float(np.mean(expert_dists)) if expert_dists else 0.0
+        diversity = float(np.mean(diversity_dists)) if diversity_dists else 0.0
+
         return {
-            'collision_rate': 0.0,  # Placeholder
-            'off_road_rate': 0.0,   # Placeholder
-            'expert_similarity': 0.0,  # Placeholder
+            'collision_rate': collision_rate,
+            'rollout_collision_rate': rollout_collision_rate,
+            'expert_similarity': expert_similarity,
+            'diversity': diversity,
         }
+
+    def _feature_dict_to_vec(self, feat_dict, feature_names):
+        """Mean-aggregate time-series features into a fixed vector in feature_names order."""
+        vals = []
+        for name in feature_names:
+            arr = np.asarray(feat_dict.get(name, []))
+            vals.append(float(np.mean(arr)) if arr.size > 0 else 0.0)
+        return np.array(vals, dtype=float)
     
     def save_checkpoint(self, iteration):
         """Save training checkpoint"""
