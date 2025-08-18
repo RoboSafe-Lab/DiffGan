@@ -2,10 +2,10 @@ import numpy as np
 import torch
 import pickle
 import os
-from extract_features import IRLFeatureExtractor
-from run_irl import MaxEntIRL
+from MaxEntIRL.extract_features import IRLFeatureExtractor
+from MaxEntIRL.run_irl import MaxEntIRL
 from tbsim.configs.scene_edit_config import SceneEditingConfig
-from irl_config import default_config
+from MaxEntIRL.irl_config import default_config
 
 class AdversarialIRLDiffusion:
     def __init__(self, config):
@@ -16,7 +16,10 @@ class AdversarialIRLDiffusion:
         self.policy_model = None
         self.current_theta = None
         self.training_history = []
-        
+        self.theta_ema = None # EMA of theta for stability
+        self.irl_norm_mean = None
+        self.irl_norm_std = None
+
     def setup_environment(self):
         """Setup environment and models"""
         # Build SceneEditingConfig similarly to extract_features.__main__
@@ -62,8 +65,16 @@ class AdversarialIRLDiffusion:
             # Step 2: Update reward function using MaxEnt IRL (Discriminator)
             self.current_theta = self.get_reward_via_irl(generated_features)
 
-            # Step 3: Apply learned reward as guidance after n iterations
-            if iteration < num_iterations - self.config.skip_num_scenes:
+            # Maintain an EMA of theta for smoother guidance
+            beta = getattr(self.config, "theta_ema_beta", 0.9)
+            if self.current_theta is not None:
+                if self.theta_ema is None:
+                    self.theta_ema = np.array(self.current_theta, dtype=float)
+                else:
+                    self.theta_ema = beta * self.theta_ema + (1.0 - beta) * np.array(self.current_theta, dtype=float)
+
+            # Step 3: Apply learned reward as guidance
+            if iteration < num_iterations - 1:
                 self.update_diffusion_model_with_reward()
             
             # Step 4: Evaluate and log progress
@@ -89,7 +100,12 @@ class AdversarialIRLDiffusion:
         features_list = list(generated_features.values())
         irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations)
         learned_theta, training_log = irl.fit(features_list)
+        
+        # capture normalization stats for guidance
+        self.irl_norm_mean = irl.norm_mean
+        self.irl_norm_std = irl.norm_std
         print(f"Learned reward weights: {learned_theta}")
+        
         return learned_theta
 
     def update_diffusion_model_with_reward(self):
@@ -107,17 +123,22 @@ class AdversarialIRLDiffusion:
         if self.current_theta is None:
             return None        
         
+        # Use EMA weights for stability (fallback to current if ema missing)
+        theta = self.theta_ema if self.theta_ema is not None else np.array(self.current_theta, dtype=float)
+        
         # Define feature names to match your IRL features
         feature_names = self.config.feature_names
                
         # Create custom guidance based on learned reward
         reward_guidance = {
             'name': 'learned_reward_guidance',
-            'weight': 5.0,  # Adjust based on your needs
+            'weight': getattr(self.config, "guidance_weight", 1.0),
             'params': {
-                'reward_weights': self.current_theta.tolist(), 
+                'reward_weights': theta.tolist(), 
                 'feature_names': feature_names,
-                'dt': self.config.step_time
+                'dt': self.config.step_time,
+                'norm_mean': self.irl_norm_mean.tolist(),
+                'norm_std': self.irl_norm_std.tolist(),
             },
             'agents': None  # Apply to all agents
         }
@@ -135,15 +156,23 @@ class AdversarialIRLDiffusion:
         if self.env is not None and hasattr(self.env, "eval_cfg"):
             eval_cfg = self.env.eval_cfg
             if hasattr(eval_cfg, "edits"):
-                if getattr(eval_cfg, "apply_guidance", None) is False:
-                    eval_cfg.apply_guidance = True
+                eval_cfg.apply_guidance = True
+                
                 if not hasattr(eval_cfg.edits, "guidance_config") or eval_cfg.edits.guidance_config is None:
                     eval_cfg.edits.guidance_config = []
-                if not isinstance(eval_cfg.edits.guidance_config, list):
-                    eval_cfg.edits.guidance_config = [eval_cfg.edits.guidance_config]
-                eval_cfg.edits.guidance_config.append(reward_guidance)
+                # Flatten per-scene format if present
+                if len(eval_cfg.edits.guidance_config) > 0 and isinstance(eval_cfg.edits.guidance_config[0], list):
+                    scenes_cfg = eval_cfg.edits.guidance_config
+                else:
+                    scenes_cfg = [eval_cfg.edits.guidance_config]
+                # Replace any previous learned_reward_guidance in each scene
+                new_scenes_cfg = []
+                for scene_list in scenes_cfg:
+                    filtered = [g for g in scene_list if g.get('name') != 'learned_reward_guidance']
+                    filtered.append(reward_guidance)
+                    new_scenes_cfg.append(filtered)
+                eval_cfg.edits.guidance_config = new_scenes_cfg
                 print(f"Applied reward guidance with weights: {reward_guidance['params']['reward_weights']}")
-                return
 
 
     def evaluate_iteration(self, generated_features, iteration):
@@ -167,7 +196,7 @@ class AdversarialIRLDiffusion:
         print(f"Iteration {iteration} metrics: {metrics}")
 
     def compute_trajectory_quality_metrics(self, generated_features):
-         """
+        """
         Compute metrics directly from generated feature dictionaries (no persistent state).
         Derives:
           - collision_rate: fraction of agent-time steps with min_dis < threshold

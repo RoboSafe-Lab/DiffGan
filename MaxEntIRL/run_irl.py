@@ -2,7 +2,7 @@ import os
 import pickle
 import numpy as np
 from typing import List, Dict, Any, Tuple, Optional
-from irl_config import default_config
+from .irl_config import default_config
 
 
 class MaxEntIRL:
@@ -30,6 +30,10 @@ class MaxEntIRL:
 
         self.theta = np.random.RandomState(seed).normal(0, 0.05, size=self.feature_num)
 
+        self.norm_mean: Optional[np.ndarray] = None
+        self.norm_std: Optional[np.ndarray] = None
+        self.eps = 1e-8
+        
     @staticmethod
     def load_features(feature_dir: str) -> List[Any]:
         if not os.path.exists(feature_dir):
@@ -42,22 +46,43 @@ class MaxEntIRL:
                     features.append(pickle.load(f))
         return features
 
-    def convert_features_to_array(self, features: Any) -> np.ndarray:
+    def convert_features_to_array(self, features: Any, apply_norm: bool = True) -> np.ndarray:
         """
         Convert a feature dict (time-series) to a fixed-length vector in self.feature_names order.
-        Aggregation = mean over time. Missing features -> 0.
+        Aggregation = mean over time. normalized by z-score.
         """
         if isinstance(features, dict):
             vals = []
             for name in self.feature_names:
-                if name in features:
-                    arr = np.asarray(features[name])
-                    vals.append(float(np.mean(arr)) if arr.size > 0 else 0.0)
-                else:
-                    vals.append(0.0)
-            return np.array(vals, dtype=float)
-        # Already a numeric vector
-        return np.asarray(features, dtype=float)
+                arr = np.asarray(features[name])
+                vals.append(float(np.mean(arr)) if arr.size > 0 else 0.0)
+            vec = np.array(vals, dtype=float)
+        else:
+            vec = np.asarray(features, dtype=float)
+            
+        if apply_norm and self.norm_mean is not None and self.norm_std is not None:
+            vec = (vec - self.norm_mean) / (self.norm_std + self.eps)
+        return vec
+
+    def _compute_normalization_stats(self, features: List[Any]) -> tuple[np.ndarray, np.ndarray]:
+        """Collect feature vectors (expert + rollouts) and compute per-feature mean/std."""
+        vecs: list[np.ndarray] = []
+        for scene_data in features:
+            for frame_data in scene_data:
+                ff = frame_data["frame_features"]
+                roll = ff["agent_rollout_features"]
+                gt = ff["agent_ground_truth_features"]
+                for _, gt_feat in gt.items():
+                    vecs.append(self.convert_features_to_array(gt_feat, apply_norm=False))
+                for _, lst in roll.items():
+                    for rfeat in lst:
+                        vecs.append(self.convert_features_to_array(rfeat, apply_norm=False))
+
+        mat = np.stack(vecs, axis=0)
+        mean = mat.mean(axis=0)
+        std = mat.std(axis=0)
+        std = np.where(std < 1e-6, 1.0, std)  # avoid tiny std
+        return mean, std
 
     def _traj_reward(self, feat_vec: np.ndarray) -> float:
         return float(np.dot(feat_vec, self.theta))
@@ -91,6 +116,10 @@ class MaxEntIRL:
             "theta": [],
         }
 
+        # Compute normalization once before iterations
+        if self.norm_mean is None or self.norm_std is None:
+            self.norm_mean, self.norm_std = self._compute_normalization_stats(features)
+            
         for it in range(self.n_iters):
             print(f"iteration: {it + 1}/{self.n_iters}")
 
@@ -187,9 +216,10 @@ class MaxEntIRL:
         return theta, training_log
 
     @staticmethod
-    def save_results(theta: np.ndarray, training_log: Dict[str, Any], path: str = "irl_results.pkl") -> None:
+    def save_results(theta: np.ndarray, training_log: Dict[str, Any], path: str = "irl_results.pkl",
+                     norm_mean: Optional[np.ndarray] = None, norm_std: Optional[np.ndarray] = None) -> None:
         with open(path, "wb") as f:
-            pickle.dump({"theta": theta, "training_log": training_log}, f)
+            pickle.dump({"theta": theta, "training_log": training_log, "norm_mean": norm_mean, "norm_std": norm_std}, f)
         print(f"Saved IRL results to {path}")
 
 
@@ -204,4 +234,4 @@ if __name__ == "__main__":
     theta, log = irl.fit(features)
     print(f"Final learned weights: {theta}")
 
-    MaxEntIRL.save_results(theta, log, path="irl_results.pkl")
+    MaxEntIRL.save_results(theta, log, path="irl_results.pkl", norm_mean=irl.norm_mean, norm_std=irl.norm_std)

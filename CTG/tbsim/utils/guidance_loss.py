@@ -2083,27 +2083,33 @@ class StayAwayLoss(GuidanceLoss):
 
 
 class LearnedRewardGuidance(GuidanceLoss):
-    def __init__(self, weight=1.0, reward_weights=None, feature_names=None, dt=0.1):
+    def __init__(self, weight=1.0, reward_weights=None, feature_names=None, dt=0.1,
+                 norm_mean=None, norm_std=None):
         super().__init__()
         self.weight = weight
         self.reward_weights = torch.tensor(reward_weights) if reward_weights else None
         self.feature_names = feature_names
         self.dt = dt
-
+        self.norm_mean = None if norm_mean is None else torch.as_tensor(norm_mean, dtype=torch.float32)
+        self.norm_std = None if norm_std is None else torch.as_tensor(norm_std, dtype=torch.float32)
+        
     def forward(self, x, data_batch, agt_mask=None):
         """
         x: [B, N, T, 6] where 6 = (x, y, vel, yaw, acc, yawvel) per sample
         returns (B, N) loss. We minimize -reward.
         """
-        if self.reward_weights is None or len(self.reward_weights) == 0:
-            # Return zero loss if no weights learned yet
-            return torch.zeros((x.size(0), x.size(1)), device=x.device)
-    
         # Optional mask to select subset of agents
-        x_masked = x[agt_mask] if agt_mask is not None else x
-    
+        if agt_mask is not None:
+            x = x[agt_mask]
+            
+        if self.reward_weights is None or len(self.feature_names) == 0:
+            # Return zero loss if no weights learned yet
+            return x.new_zeros((x.shape[0], x.shape[1]))
+        
         # Compute features in torch aligned with extractor (mean over time)
-        feats = self._extract_basic_features(x_masked, self.dt, self.feature_names)  # [B' , N, F]
+        feats = self._extract_basic_features(x, self.dt, self.feature_names)  # [B,N,F]
+        if self.norm_mean is not None and self.norm_std is not None:
+            feats = (feats - self.norm_mean.to(x.device)) / (self.norm_std.to(x.device) + 1e-6)
         
         # Validate dimensionality
         F_expected = len(self.reward_weights)
@@ -2113,18 +2119,9 @@ class LearnedRewardGuidance(GuidanceLoss):
                 f"feats={feats.size(-1)} vs weights={F_expected}. "
                 f"Check that irl_config.feature_names used for extraction/training matches guidance."
             )
-
         # Reward per sample
-        rw = torch.sum(feats * self.reward_weights.to(feats.device), dim=-1)  # [B', N]
-        loss_local = -self.weight * rw  # minimize negative reward
-
-        # Scatter back into full B if masking
-        if agt_mask is not None:
-            loss = torch.zeros((x.size(0), x.size(1)), device=x.device, dtype=x.dtype)
-            loss[agt_mask] = loss_local
-            return loss
-
-        return loss_local
+        rw = torch.matmul(feats, self.reward_weights.to(x.device))  # [B,N]
+        return -self.weight * rw # minimize negative reward
 
     def _extract_basic_features(self, x, dt, feature_names):
         """

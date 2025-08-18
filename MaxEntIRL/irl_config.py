@@ -8,12 +8,12 @@ class FeatureExtractionConfig:
     """Configuration for IRL feature extraction"""
     
     # Model and environment - Match the working scene_editor.py format
-    policy_ckpt_dir: str = "../CTG/diffuser_trained_models/test/run0"  # Relative path like scene_editor
+    policy_ckpt_dir: str = "./CTG/diffuser_trained_models/test/run0"  # Relative path like scene_editor
     policy_ckpt_key: str = "iter100000.ckpt"        # Full path with checkpoints/ prefix
     
     # Output settings
     output_dir: str = "irl_features_output"
-    save_features: bool = True
+    save_features: bool = False  # Whether to save extracted features
     
     # feature names
     feature_names: List[str] = field(default_factory=lambda: 
@@ -27,7 +27,7 @@ class FeatureExtractionConfig:
     num_scenes_per_batch: int = 1
     num_sim_per_scene: int = 1
     
-    debug: bool = True  # Debug mode for additional logging
+    debug: bool = False  # Debug mode for additional logging
     
     filter_dynamic: bool = True  # Filter for dynamic agents only    
     min_velocity_threshold: float = 2.0 # Minimum velocity threshold for filtering agents
@@ -73,9 +73,6 @@ class FeatureExtractionConfig:
 
     # Number of training iterations of DiffusionGan
     num_iterations: int = 100
-
-    # Skip the last n scenes for evaluation
-    skip_num_scenes: int = 5
 
 # Default configuration instance
 default_config = FeatureExtractionConfig()

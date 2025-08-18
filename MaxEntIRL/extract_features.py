@@ -4,8 +4,8 @@ import torch
 import random
 import importlib
 import pickle
-from irl_config import default_config
-from visualize_rollout_gt import visualize_guided_rollout_with_gt, visualize_trajectories_simple
+from .irl_config import default_config
+from .visualize_rollout_gt import visualize_guided_rollout_with_gt, visualize_trajectories_simple
 from tbsim.configs.scene_edit_config import SceneEditingConfig
 from tbsim.evaluation.env_builders import EnvNuscBuilder, EnvUnifiedBuilder
 from tbsim.policies.wrappers import RolloutWrapper
