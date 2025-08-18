@@ -780,14 +780,16 @@ def heuristic_gptkeepdistance(sim_scene, dt, min_distance, max_distance, **kwarg
     return guide_config
 
 
-def heuristic_learned_reward_guidance(sim_scene, dt, reward_weights, feature_names, **kwargs):
+def heuristic_learned_reward_guidance(sim_scene, dt, reward_weights, feature_names, norm_mean, norm_std, **kwargs):
     """Apply learned reward as guidance"""
     guide_config = {
         'name': 'learned_reward_guidance',
         'params': {
             'reward_weights': reward_weights,
             'feature_names': feature_names,
-            'dt': dt
+            'dt': dt,
+            'norm_mean': norm_mean,
+            'norm_std': norm_std,
         },
         'agents': None,
     }

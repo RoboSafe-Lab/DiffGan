@@ -184,14 +184,16 @@ class IRLFeatureExtractor:
                             "frame_features": frame_features_data
                         })
 
-                # Save features for current scene
-                if self.config.save_features and scene_features:            
-                    output_path = os.path.join(self.config.output_dir, f"{scene_name}_irl_features.pkl")
-                    with open(output_path, 'wb') as f:
-                        pickle.dump(scene_features, f)
-
-                    print(f"Saved {len(scene_features)} frame features to {output_path}")
+                # return features for current scene, and save if necessary
+                if scene_features:
                     all_features[f"{scene_idx}"] = scene_features
+                    
+                    if self.config.save_features:            
+                        output_path = os.path.join(self.config.output_dir, f"{scene_name}_irl_features.pkl")
+                        with open(output_path, 'wb') as f:
+                            pickle.dump(scene_features, f)
+
+                        print(f"Saved {len(scene_features)} frame features to {output_path}")                    
                     
             torch.cuda.empty_cache()
         return all_features

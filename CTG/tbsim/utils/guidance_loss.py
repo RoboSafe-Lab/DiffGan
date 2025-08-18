@@ -511,8 +511,8 @@ class AgentCollisionLoss(GuidanceLoss):
         # consider collision gradients only for those moving vehicles
         moving = torch.abs(curr_speed) > self.guide_moving_speed_th
         stationary = ~moving
-        stationary = stationary.view(-1, 1, 1, 1).expand_as(x)
-        x[stationary] = x[stationary].detach()
+        stationary_mask = stationary.view(-1, 1, 1, 1).expand_as(x)
+        x = torch.where(stationary_mask, x.detach(), x)
 
         pos_pred = x[..., :2]
         yaw_pred = x[..., 3:4]
@@ -2086,122 +2086,142 @@ class LearnedRewardGuidance(GuidanceLoss):
     def __init__(self, weight=1.0, reward_weights=None, feature_names=None, dt=0.1,
                  norm_mean=None, norm_std=None):
         super().__init__()
-        self.weight = weight
-        self.reward_weights = torch.tensor(reward_weights) if reward_weights else None
-        self.feature_names = feature_names
-        self.dt = dt
-        self.norm_mean = None if norm_mean is None else torch.as_tensor(norm_mean, dtype=torch.float32)
-        self.norm_std = None if norm_std is None else torch.as_tensor(norm_std, dtype=torch.float32)
-        
+        self.weight = float(weight)
+        self.reward_weights = None if reward_weights is None else torch.as_tensor(
+            np.array(reward_weights, dtype=np.float32)
+        )
+        self.feature_names = list(feature_names) if feature_names is not None else []
+        self.dt = float(dt)
+        self.norm_mean = None if (norm_mean is None) else torch.as_tensor(norm_mean, dtype=torch.float32)
+        self.norm_std = None if (norm_std is None) else torch.as_tensor(norm_std, dtype=torch.float32)
+
     def forward(self, x, data_batch, agt_mask=None):
         """
-        x: [B, N, T, 6] where 6 = (x, y, vel, yaw, acc, yawvel) per sample
-        returns (B, N) loss. We minimize -reward.
+        x: (B, N, T, 6) -> state in agent frame
+        returns (B, N) loss. Minimize -reward.
         """
-        # Optional mask to select subset of agents
-        if agt_mask is not None:
-            x = x[agt_mask]
-            
         if self.reward_weights is None or len(self.feature_names) == 0:
-            # Return zero loss if no weights learned yet
             return x.new_zeros((x.shape[0], x.shape[1]))
-        
-        # Compute features in torch aligned with extractor (mean over time)
-        feats = self._extract_basic_features(x, self.dt, self.feature_names)  # [B,N,F]
-        if self.norm_mean is not None and self.norm_std is not None:
-            feats = (feats - self.norm_mean.to(x.device)) / (self.norm_std.to(x.device) + 1e-6)
-        
-        # Validate dimensionality
-        F_expected = len(self.reward_weights)
-        if feats.size(-1) != F_expected:
-            raise RuntimeError(
-                f"Feature length mismatch in LearnedRewardGuidance: "
-                f"feats={feats.size(-1)} vs weights={F_expected}. "
-                f"Check that irl_config.feature_names used for extraction/training matches guidance."
-            )
-        # Reward per sample
-        rw = torch.matmul(feats, self.reward_weights.to(x.device))  # [B,N]
-        return -self.weight * rw # minimize negative reward
 
-    def _extract_basic_features(self, x, dt, feature_names):
+        feats = self._extract_basic_features(x, data_batch, self.dt, self.feature_names, agt_mask)  # (B,N,F)
+
+        device = x.device
+        F = self.reward_weights.numel()
+        if feats.size(-1) != F:
+            raise RuntimeError(
+                f"Feature length mismatch: feats={feats.size(-1)} vs weights={F}. "
+                f"Ensure feature_names are consistent."
+            )
+
+        w = self.reward_weights.to(device).view(1, 1, F)
+        if self.norm_mean is not None and self.norm_std is not None:
+            m = self.norm_mean.to(device).view(1, 1, F)
+            s = torch.clamp(self.norm_std.to(device).view(1, 1, F), min=1e-6)
+            feats = (feats - m) / s
+
+        reward = torch.sum(feats * w, dim=-1)  # (B,N)
+        loss = -self.weight * reward
+
+        if agt_mask is not None:
+            loss = loss[agt_mask]
+
+        return loss
+
+    def _extract_basic_features(self, x, data_batch, dt, feature_names, agt_mask=None):
         """
-        Torch feature extraction to mirror IRL extractor:
-        - velocity: mean of speed over time
-        - a_long: mean of d(velocity)/dt
-        - jerk_long: mean of d(a_long)/dt
-        - a_lateral: mean of yaw_rate * mid_speed (approx)
-        - min_dis: mean over time of min distance to any other agent in same scene (per-sample)
-        Returns: [B, N, F] in feature_names order.
+        Compute features in world frame and mask pairwise ops by scene:
+        - velocity: mean speed
+        - a_long: mean d(speed)/dt
+        - jerk_long: mean d(a_long)/dt
+        - a_lateral: mean (yaw_rate * mid_speed)
+        - min_dis: mean over time of min distance to any other agent in same scene
+        Returns (B, N, F)
         """
         B, N, T, D = x.shape
         device = x.device
-        eps = 1e-6
 
-        # Extract channels
-        pos = x[..., :2]       # [B, N, T, 2]
-        vel = x[..., 2]        # [B, N, T]
-        yaw = x[..., 3]        # [B, N, T]
+        pos = x[..., :2]            # (B,N,T,2) agent frame
+        vel = x[..., 2]             # (B,N,T)
+        yaw = x[..., 3:4]           # (B,N,T,1)
+
+        # World transform for distance features
+        world_from_agent = data_batch["world_from_agent"]  # (B,3,3)
+        pos_w, yaw_w = transform_agents_to_world(pos, yaw, world_from_agent)  # (B,N,T,2), (B,N,T,1)
+        yaw_w = yaw_w[..., 0]  # (B,N,T)
+
+        # Detach non-guided agents to avoid backprop to them in pairwise ops
+        if agt_mask is not None:
+            mask = agt_mask.view(B, 1, 1, 1).expand_as(pos_w)
+            pos_w = torch.where(mask, pos_w, pos_w.detach())
+            yaw_w = torch.where(mask[..., 0], yaw_w, yaw_w.detach())
+            vel = torch.where(mask[..., 0], vel, vel.detach())
 
         def tdiff(tensor):
-            return tensor[..., 1:] - tensor[..., :-1]  # diff along time
+            return tensor[..., 1:] - tensor[..., :-1]
 
-        feats_list = []
+        feats_out = []
         for name in feature_names:
-            if name == 'velocity':
-                # mean vel over time (if T==0 guarded by eps)
-                v_mean = torch.mean(vel, dim=-1) if T > 0 else torch.zeros((B, N), device=device)
-                feats_list.append(v_mean)
+            if name == "velocity":
+                f = torch.mean(vel, dim=-1) if T > 0 else torch.zeros((B, N), device=device)
+                feats_out.append(f)
 
-            elif name == 'a_long':
+            elif name == "a_long":
                 if T > 1:
-                    a = tdiff(vel) / dt  # [B, N, T-1]
-                    feats_list.append(torch.mean(a, dim=-1))
+                    a = tdiff(vel) / dt  # (B,N,T-1)
+                    feats_out.append(torch.mean(a, dim=-1))
                 else:
-                    feats_list.append(torch.zeros((B, N), device=device))
+                    feats_out.append(torch.zeros((B, N), device=device))
 
-            elif name == 'jerk_long':
+            elif name == "jerk_long":
                 if T > 2:
-                    a = tdiff(vel) / dt              # [B, N, T-1]
-                    j = tdiff(a) / dt                # [B, N, T-2]
-                    feats_list.append(torch.mean(j, dim=-1))
+                    a = tdiff(vel) / dt              # (B,N,T-1)
+                    j = tdiff(a) / dt                # (B,N,T-2)
+                    feats_out.append(torch.mean(j, dim=-1))
                 else:
-                    feats_list.append(torch.zeros((B, N), device=device))
+                    feats_out.append(torch.zeros((B, N), device=device))
 
-            elif name == 'a_lateral':
+            elif name == "a_lateral":
                 if T > 1:
-                    yaw_rate = tdiff(yaw) / dt       # [B, N, T-1]
-                    v_mid = 0.5 * (vel[..., :-1] + vel[..., 1:])  # [B, N, T-1]
+                    yaw_rate = tdiff(yaw_w) / dt     # (B,N,T-1)
+                    v_mid = 0.5 * (vel[..., :-1] + vel[..., 1:])  # (B,N,T-1)
                     a_lat = yaw_rate * v_mid
-                    feats_list.append(torch.mean(a_lat, dim=-1))
+                    feats_out.append(torch.mean(a_lat, dim=-1))
                 else:
-                    feats_list.append(torch.zeros((B, N), device=device))
+                    feats_out.append(torch.zeros((B, N), device=device))
 
-            elif name == 'min_dis':
-                # Per sample n, per time t: min distance to any other agent within same scene
-                if B > 1 and T > 0:
-                    # pos: [B, N, T, 2] -> compute per-sample
-                    # output shape [B, N]
-                    min_d_all = []
-                    for n in range(N):
-                        p = pos[:, n, :, :]                        # [B, T, 2]
-                        p1 = p.unsqueeze(1)                        # [1, B, T, 2]
-                        p2 = p.unsqueeze(0)                        # [B, 1, T, 2]
-                        dmat = torch.norm(p1 - p2, dim=-1)         # [B, B, T]
-                        eye = torch.eye(B, device=device, dtype=torch.bool).unsqueeze(-1).expand(B, B, T)
-                        dmat = torch.where(eye, torch.full_like(dmat, float('inf')), dmat)
-                        dmin_t = torch.min(dmat, dim=1).values     # [B, T]
-                        dmin = torch.mean(dmin_t, dim=-1)          # [B]
-                        min_d_all.append(dmin)
-                    min_d = torch.stack(min_d_all, dim=1)          # [B, N]
-                    feats_list.append(min_d)
+            elif name == "min_dis":
+                # Pairwise distances across agents in same scene, per sample and timestep
+                if T > 0:
+                    # Scene mask (B,B): same scene and not self
+                    scene_index = data_batch["scene_index"]  # (B,)
+                    same_scene = scene_index.view(B, 1) == scene_index.view(1, B)
+                    not_self = ~torch.eye(B, dtype=torch.bool, device=device)
+                    pair_mask = (same_scene & not_self).to(pos_w.dtype)  # (B,B)
+
+                    # pos_w: (B,N,T,2) -> (N*T, B, 2)
+                    p = pos_w.permute(1, 2, 0, 3).reshape(N * T, B, 2)
+                    # cdist per (N*T)
+                    d = torch.cdist(p, p)  # (N*T, B, B)
+
+                    # Mask out different scenes and self; set to big val
+                    big = torch.full_like(d, 1e9)
+                    pm = pair_mask.unsqueeze(0).expand_as(d)
+                    d = torch.where(pm > 0.5, d, big)
+
+                    # min over other agents -> (N*T, B)
+                    dmin = d.min(dim=-1).values
+                    # replace big with cap (isolated agents)
+                    dmin = torch.where(dmin >= 1e9 * 0.5, torch.full_like(dmin, 50.0), dmin)
+                    # average over time -> (N,B) then transpose to (B,N)
+                    dmin = dmin.reshape(N, T, B).mean(dim=1).permute(1, 0)
+                    feats_out.append(dmin)
                 else:
-                    feats_list.append(torch.full((B, N), 50.0, device=device))
+                    feats_out.append(torch.full((B, N), 50.0, device=device))
 
             else:
-                # Unknown feature: fill zeros (keeps length aligned)
-                feats_list.append(torch.zeros((B, N), device=device))
+                feats_out.append(torch.zeros((B, N), device=device))
 
-        return torch.stack(feats_list, dim=-1)  # [B, N, F]
+        return torch.stack(feats_out, dim=-1)  # (B,N,F)
 
 ############## GUIDANCE utilities ########################
 

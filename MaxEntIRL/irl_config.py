@@ -22,7 +22,7 @@ class FeatureExtractionConfig:
     # Scene selection
     # scene_indices: List[int] = field(default_factory=lambda: [0]) # Default to first scene
    
-    num_scenes_to_evaluate: int = 10
+    num_scenes_to_evaluate: int = 1
     eval_scenes: List[int] = field(default_factory=lambda: np.arange(0, 100, 10).tolist())
     num_scenes_per_batch: int = 1
     num_sim_per_scene: int = 1

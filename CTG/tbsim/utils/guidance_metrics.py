@@ -891,6 +891,7 @@ GUIDANCE_NAME_TO_METRICS = {
     'gpt': {'gpt': GPTGuidance},
     'gptcollision': {'gptcollision': GPTCollisionGuidance},
     'gptkeepdistance': {'gptkeepdistance': GPTKeepDistanceLoss},
+    'learned_reward_guidance': {},
 }
 
 def guidance_metrics_from_config(guidance_config):
