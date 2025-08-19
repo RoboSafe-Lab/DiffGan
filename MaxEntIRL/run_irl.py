@@ -225,7 +225,7 @@ class MaxEntIRL:
 
 if __name__ == "__main__":
     # Load features from output dir in config
-    feature_dir = default_config.output_dir
+    feature_dir = os.path.join(default_config.output_dir, "features")
     features = MaxEntIRL.load_features(feature_dir)
 
     # Use feature names from config so extractor/config control the set
@@ -234,4 +234,5 @@ if __name__ == "__main__":
     theta, log = irl.fit(features)
     print(f"Final learned weights: {theta}")
 
-    MaxEntIRL.save_results(theta, log, path="irl_results.pkl", norm_mean=irl.norm_mean, norm_std=irl.norm_std)
+    weights_output_dir = os.path.join(default_config.output_dir, "irl_weights.pkl")
+    MaxEntIRL.save_results(theta, log, path=weights_output_dir, norm_mean=irl.norm_mean, norm_std=irl.norm_std)

@@ -188,8 +188,11 @@ class IRLFeatureExtractor:
                 if scene_features:
                     all_features[f"{scene_idx}"] = scene_features
                     
-                    if self.config.save_features:            
-                        output_path = os.path.join(self.config.output_dir, f"{scene_name}_irl_features.pkl")
+                    if self.config.save_features:
+                        features_output_dir = os.path.join(self.config.output_dir, "features")
+                        if not os.path.exists(features_output_dir):
+                            os.makedirs(features_output_dir)
+                        output_path = os.path.join(features_output_dir, f"{scene_name}_irl_features.pkl")
                         with open(output_path, 'wb') as f:
                             pickle.dump(scene_features, f)
 
@@ -211,66 +214,16 @@ class IRLFeatureExtractor:
             print(f"    No dynamic agents found in ground truth, skipping rollouts")
             return None, None
         
-        # Step 2: Generate rollouts
-        rollouts = []
-        # Generate multiple rollouts from this frame
-        print(f"    Generating {self.config.num_rollouts} rollouts from frame {start_frame}")
-
-        for rollout_idx in range(self.config.num_rollouts):
-            # Reset environment to this specific frame
-            scenes_valid = self.env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
-            if not scenes_valid[0]:
-                print(f"      Scene {scene_idx} invalid at frame {start_frame} for rollout {rollout_idx}")
-                continue
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
             
-            # Add variation for different rollouts
-            if rollout_idx > 0:
-                np.random.seed(42 + rollout_idx + start_frame)
-                torch.manual_seed(42 + rollout_idx + start_frame)
-            
-            # Generate single rollout from this frame
-            rollout_data = self._generate_single_rollout_from_frame(
-                scene_idx, start_frame, rollout_idx
-            )
-
-            if rollout_data is not None:
-                rollouts.append(rollout_data)
-            else:
-                print(f"      Failed to generate rollout {rollout_idx}")
-
-        print(f"    Generated {len(rollouts)} valid rollouts out of {self.config.num_rollouts} attempts")
-        # Step 3: Extract trajectories from rollouts
-        rollout_trajectories = self._extract_trajectories_from_rollouts(rollouts)
-
-        if not rollout_trajectories:
-            print(f"    Warning: No dynamic agent trajectories found for frame {start_frame}")
-            return [], None
-            
-        return rollout_trajectories, ground_truth
-
-    def _generate_single_rollout_from_frame(self, scene_idx, start_frame, rollout_idx):
-        """
-        Generate a single rollout starting from current environment state with guidance like scene_editor.py
-        """
-        try:
-            # Use the guided_rollout function from scene_edit_utils            
-            print(f"      Rollout {rollout_idx}: Starting guided_rollout with horizon={self.config.horizon}")
-            
-            # Wrap policy like scene_editor.py does
-            rollout_policy = RolloutWrapper(agents_policy=self.policy)
-            
-            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            
-            # Initialize guidance and constraint configs like scene_editor.py (lines 189-235)
-            guidance_config = None
-            constraint_config = None
-            
-            # Get the eval_cfg to determine guidance settings
-            # You'll need to pass this from your main function or get it from env
-            eval_cfg = getattr(self.env, 'eval_cfg', None)  # Add this to your setup function
-            obs_to_torch = eval_cfg.eval_class not in ["GroundTruth", "ReplayAction"]
-            
-            if eval_cfg is not None:
+        # Initialize guidance and constraint configs like scene_editor.py (lines 189-235)
+        guidance_config = None
+        constraint_config = None
+        
+        # Get the eval_cfg to determine guidance settings
+        eval_cfg = getattr(self.env, 'eval_cfg', None)  
+        obs_to_torch = eval_cfg.eval_class not in ["GroundTruth", "ReplayAction"]
+        if eval_cfg is not None:
                 # Determine guidance based on editing source
                 heuristic_config = []
                 
@@ -300,25 +253,69 @@ class IRLFeatureExtractor:
                             [start_frame],  # Single start frame
                             example_batch=ex_obs['agents']
                         )
-                        
-                        # Check if heuristic determined valid guidance
-                        if len(heuristic_config) > 0:
-                            valid_scene_inds = []
-                            for sci, sc_cfg in enumerate(heuristic_guidance_cfg):
-                                if len(sc_cfg) > 0:
-                                    valid_scene_inds.append(sci)
-                            
-                            if len(valid_scene_inds) == 0:
-                                print(f"      No valid heuristic configs for scene {scene_idx}, using no guidance")
-                                heuristic_guidance_cfg = [[]]
-                            else:
-                                heuristic_guidance_cfg = [heuristic_guidance_cfg[vi] for vi in valid_scene_inds]
-                        
-                        # Merge guidance configs
+                        # Keep only scenes with at least one guidance
+                        valid_scene_inds = [i for i, sc in enumerate(heuristic_guidance_cfg) if len(sc) > 0]
+                        heuristic_guidance_cfg = [heuristic_guidance_cfg[i] for i in valid_scene_inds] if len(valid_scene_inds) > 0 else [[]]
                         guidance_config = merge_guidance_configs(guidance_config, heuristic_guidance_cfg)
+        
+        print(f"      Rollouts: guidance_config type: {type(guidance_config)}, length: {len(guidance_config) if guidance_config else 'None'}")
+        print(f"      Rollouts: constraint_config type: {type(constraint_config)}, length: {len(constraint_config) if constraint_config else 'None'}")
 
-            print(f"      Rollout {rollout_idx}: guidance_config type: {type(guidance_config)}, length: {len(guidance_config) if guidance_config else 'None'}")
-            print(f"      Rollout {rollout_idx}: constraint_config type: {type(constraint_config)}, length: {len(constraint_config) if constraint_config else 'None'}")
+        # Step 2: Generate rollouts
+        rollouts = []
+        # Generate multiple rollouts from this frame
+        print(f"    Generating {self.config.num_rollouts} rollouts from frame {start_frame}")
+
+        for rollout_idx in range(self.config.num_rollouts):
+            # Reset environment to this specific frame
+            scenes_valid = self.env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
+            if not scenes_valid[0]:
+                print(f"      Scene {scene_idx} invalid at frame {start_frame} for rollout {rollout_idx}")
+                continue
+            
+            # Add variation for different rollouts
+            if rollout_idx > 0:
+                np.random.seed(42 + rollout_idx + start_frame)
+                torch.manual_seed(42 + rollout_idx + start_frame)
+            
+            # Generate single rollout from this frame
+            rollout_data = self._generate_single_rollout_from_frame(
+                scene_idx, start_frame, rollout_idx,
+                guidance_config=guidance_config,
+                constraint_config=constraint_config,
+                obs_to_torch=obs_to_torch,
+                device=device
+            )
+
+            if rollout_data is not None:
+                rollouts.append(rollout_data)
+            else:
+                print(f"      Failed to generate rollout {rollout_idx}")
+
+        print(f"    Generated {len(rollouts)} valid rollouts out of {self.config.num_rollouts} attempts")
+        # Step 3: Extract trajectories from rollouts
+        rollout_trajectories = self._extract_trajectories_from_rollouts(rollouts)
+
+        if not rollout_trajectories:
+            print(f"    Warning: No dynamic agent trajectories found for frame {start_frame}")
+            return [], None
+            
+        return rollout_trajectories, ground_truth
+
+    def _generate_single_rollout_from_frame(self, scene_idx, start_frame, rollout_idx,
+                                            guidance_config=None, constraint_config=None,
+                                            obs_to_torch=None, device=None):
+        """
+        Generate a single rollout starting from current environment state with guidance like scene_editor.py
+        """
+        try:
+            # Use the guided_rollout function from scene_edit_utils            
+            print(f"      Rollout {rollout_idx}: Starting guided_rollout with horizon={self.config.horizon}")
+            
+            # Wrap policy like scene_editor.py does
+            rollout_policy = RolloutWrapper(agents_policy=self.policy)            
+            eval_cfg = getattr(self.env, 'eval_cfg', None)  
+            
             # Call guided_rollout
             stats, info, renderings = guided_rollout(
                 env=self.env,
@@ -384,26 +381,13 @@ class IRLFeatureExtractor:
                 agents_per_rollout = {}
                 
                 # Get agent IDs
-                agent_ids = None
-                track_ids = buffer['track_id']
-                if hasattr(track_ids, 'cpu'):
-                    agent_ids = track_ids.cpu().numpy()
-                elif hasattr(track_ids, 'detach'):
-                    agent_ids = track_ids.detach().numpy()
-                else:
-                    agent_ids = np.array(track_ids)
+                agent_ids = np.asarray(buffer['track_id'])
                         
                 unique_agent_ids = agent_ids[:, 0]  # [num_agents, timesteps], get first column for unique IDs
                 
                 # Get centroid data
-                if 'centroid' in buffer and agent_ids is not None:
-                    centroids = buffer['centroid']
-                    if hasattr(centroids, 'cpu'):
-                        centroids = centroids.cpu().numpy()
-                    elif hasattr(centroids, 'detach'):
-                        centroids = centroids.detach().numpy()
-                    else:
-                        centroids = np.array(centroids)
+                if 'centroid' in buffer:
+                    centroids = np.asarray(buffer['centroid'])
                     
                     # Create dictionary with agent_id as key for a rollout
                     unique_agent_ids = unique_agent_ids.tolist()
