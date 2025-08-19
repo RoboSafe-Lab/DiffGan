@@ -531,62 +531,75 @@ class IRLFeatureExtractor:
         feature_names = self.config.feature_names
         dt = self.config.step_time
         
+        # align all trajectories to common length
+        all_ids = list(agent_trajectories_dict.keys())
+        lengths = [len(agent_trajectories_dict[aid]) for aid in all_ids]
+        T = min(lengths)
+        if T < 2:
+            return {}
+
+        # stack positions [A, T, 2]
+        pos = np.stack([agent_trajectories_dict[aid][:T] for aid in all_ids], axis=0).astype(np.float32)
+        A = pos.shape[0]
+
+        # velocities and speeds [A, T-1]
+        vel = np.diff(pos, axis=1) / dt
+        speed = np.linalg.norm(vel, axis=2)
+
+        # a_long and jerk_long
+        if speed.shape[1] > 1:
+            a_long = np.diff(speed, axis=1) / dt
+            jerk = np.diff(a_long, axis=1) / dt if a_long.shape[1] > 1 else np.zeros((A,0),dtype=np.float32)
+        else:
+            a_long = np.zeros((A,0),dtype=np.float32)
+            jerk = np.zeros((A,0),dtype=np.float32)
+
+        # a_lateral
+        if vel.shape[1] > 1:
+            heading = np.arctan2(vel[...,1], vel[...,0])
+            heading_diff = np.diff(heading, axis=1)
+            heading_diff = np.where(heading_diff > np.pi, heading_diff - 2*np.pi, heading_diff)
+            heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
+            yaw_rate = heading_diff / dt
+            v_mid = 0.5*(speed[:,:-1] + speed[:,1:])
+            a_lat = yaw_rate * v_mid
+        else:
+            a_lat = np.zeros((A,0),dtype=np.float32)
+
+        # pairwise distances over TT = T-1
+        TT = speed.shape[1]
+        pos_t = pos[:,:TT]
+        dyn_set = set(dynamic_agent_ids)
+        dyn_indices = [i for i, aid in enumerate(all_ids) if aid in dyn_set]
+        dyn_pos = pos_t[dyn_indices]     # [D, TT, 2]
+        # rel shape [A, A, TT, 2]
+        rel = dyn_pos[:, None, :, :] - pos_t[None, :, :, :]
+        dist = np.linalg.norm(rel, axis=3)                   # [A, A, TT]
+        # Mask self-distances where dynamic agent equals the compared agent
+        for d_idx, a_idx in enumerate(dyn_indices):
+            dist[d_idx, a_idx, :] = np.inf
+        # min_dist per agent/time -> [A, TT]
+        min_dis = np.clip(np.min(dist, axis=1), 0.0, 50.0)
+
+        # assemble only dynamic-agent features
         agent_features = {}
         
-        # Get all agent positions for relative computations (THW)
-        all_agent_data = {}
-        for agent_id, traj in agent_trajectories_dict.items():
-            all_agent_data[agent_id] = traj
-        
-        for agent_id, traj in agent_trajectories_dict.items():
-            if agent_id not in dynamic_agent_ids:
-                continue
-
-            features = {}
-            vel_vectors = np.diff(traj, axis=0) / dt
-            velocities = np.linalg.norm(vel_vectors, axis=1) if len(vel_vectors) > 0 else np.zeros(0)
-            headings = np.arctan2(vel_vectors[:, 1], vel_vectors[:, 0]) if len(vel_vectors) > 0 else np.zeros(0)
-
+        for i, a_idx in enumerate(dyn_indices):
+            aid = all_ids[a_idx]
+            feats = {}
             if 'velocity' in feature_names:
-                features['velocity'] = velocities
-
-            a_long = None
+                feats['velocity'] = speed[a_idx]
             if 'a_long' in feature_names:
-                a_long = np.diff(velocities) / dt if len(velocities) > 1 else np.zeros(0)
-                features['a_long'] = a_long
-
+                feats['a_long'] = a_long[a_idx]
             if 'jerk_long' in feature_names:
-                if a_long is None:
-                    a_long = np.diff(velocities) / dt if len(velocities) > 1 else np.zeros(0)
-                jerk_long = np.diff(a_long) / dt if len(a_long) > 1 else np.zeros(0)
-                features['jerk_long'] = jerk_long
-
+                feats['jerk_long'] = jerk[a_idx]
             if 'a_lateral' in feature_names:
-                if len(headings) > 1 and len(velocities) > 1:
-                    heading_rates = np.diff(headings) / dt
-                    mid_velocities = (velocities[:-1] + velocities[1:]) / 2
-                    a_lateral = heading_rates * mid_velocities
-                else:
-                    a_lateral = np.zeros(max(0, len(velocities) - 1))
-                features['a_lateral'] = a_lateral
-
+                feats['a_lateral'] = a_lat[a_idx]
             if 'min_dis' in feature_names:
-                min_dis = np.zeros(len(velocities))
-                for t in range(len(velocities)):
-                    current_pos = traj[t]
-                    md = float('inf')
-                    for other_id, other_traj in all_agent_data.items():
-                        if other_id == agent_id or t >= len(other_traj):
-                            continue
-                        dist = np.linalg.norm(other_traj[t] - current_pos)
-                        if dist < md:
-                            md = dist
-                    min_dis[t] = md if md != float('inf') else 50.0
-                features['min_dis'] = min_dis
-            
-            agent_features[agent_id] = features
-        
-        return agent_features    
+                feats['min_dis'] = min_dis[i]
+            agent_features[aid] = feats
+        return agent_features
+
 
     def is_trajectory_dynamic(self, trajectory):
         """
