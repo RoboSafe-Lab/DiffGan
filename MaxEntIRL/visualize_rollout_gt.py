@@ -54,12 +54,12 @@ def draw_ground_truth_trajectories(ax, ground_truth, raster_from_world, start_fr
 
     colors = plt.cm.Set1(np.linspace(0, 1, len(filtered_ground_truth)))
 
-    for i, (agent_id, trajectory) in enumerate(filtered_ground_truth.items()):
-        if len(trajectory) == 0:
+    for i, (agent_id, trajectory_data) in enumerate(filtered_ground_truth.items()):
+        if len(trajectory_data['positions']) == 0:
             continue
             
         # Ensure trajectory is numpy array
-        trajectory = np.array(trajectory)
+        trajectory = np.array(trajectory_data['positions'])
         if len(trajectory.shape) == 1 or trajectory.shape[0] == 0:
             continue
             
@@ -102,15 +102,15 @@ def draw_rollout_trajectories(ax, rollout_trajectories, raster_from_world, start
     rollout_colors = plt.cm.Set2(np.linspace(0, 1, len(rollout_trajectories)))
     
     for rollout_idx, rollout_data in enumerate(rollout_trajectories):        
-        for agent_id, trajectory in rollout_data.items():
+        for agent_id, trajectory_data in rollout_data.items():
             # Skip non-dynamic agents if filtering is applied
             if dynamic_agent_ids is not None and agent_id not in dynamic_agent_ids:
                 continue
-            if len(trajectory) == 0:
+            if len(trajectory_data['positions']) == 0:
                 continue
                 
             # Ensure trajectory is numpy array
-            trajectory = np.array(trajectory)
+            trajectory = np.array(trajectory_data['positions'])
             if len(trajectory.shape) == 1 or trajectory.shape[0] == 0:
                 continue
                 
@@ -172,8 +172,8 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_i
             for agent_id, traj in ground_truth.items():
                 if dynamic_agent_ids and agent_id not in dynamic_agent_ids:
                     continue  # Skip non-dynamic agents if filtering is applied
-                if len(traj) > 0:
-                    traj = np.array(traj)
+                if len(traj['positions']) > 0:
+                    traj = np.array(traj['positions'])
                     if len(traj.shape) == 2 and traj.shape[1] >= 2:
                         all_positions.extend(traj[:, :2])
         
@@ -182,8 +182,8 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_i
                 for agent_id, traj in one_rollout.items():
                     if dynamic_agent_ids and agent_id not in dynamic_agent_ids:
                         continue  # Skip non-dynamic agents if filtering is applied
-                    if len(traj) > 0:
-                        traj = np.array(traj)
+                    if len(traj['positions']) > 0:
+                        traj = np.array(traj['positions'])
                         if len(traj.shape) == 2 and traj.shape[1] >= 2:
                             all_positions.extend(traj[:, :2])
         
@@ -201,11 +201,6 @@ def visualize_guided_rollout_with_gt(rollout_trajectories, ground_truth, scene_i
             ras_yaw=0,
             scene_name=scene_name
         )
-        print(f"Render result type: {type(render_result)}")
-        if isinstance(render_result, tuple):
-            print(f"Render result length: {len(render_result)}")
-        else:
-            print(f"Render result: {render_result}")
         
         state_im, raster_from_world = render_result
         # Create figure and display rasterized map
@@ -256,8 +251,8 @@ def visualize_trajectories_simple(rollout_trajectories, ground_truth, scene_idx,
     # Draw ground truth trajectories
     if ground_truth:
         gt_colors = plt.cm.Set1(np.linspace(0, 1, len(ground_truth)))
-        for i, (agent_id, trajectory) in enumerate(ground_truth.items()):
-            trajectory = np.array(trajectory)
+        for i, (agent_id, trajectory_data) in enumerate(ground_truth.items()):
+            trajectory = np.array(trajectory_data['positions'])
             if len(trajectory) > 1 and len(trajectory.shape) == 2:
                 ax.plot(trajectory[:, 0], trajectory[:, 1], 
                        color=gt_colors[i], linewidth=3.0, linestyle='--', 
@@ -272,11 +267,11 @@ def visualize_trajectories_simple(rollout_trajectories, ground_truth, scene_idx,
         rollout_colors = plt.cm.Set2(np.linspace(0, 1, len(rollout_trajectories)))
         for rollout_idx, rollout_data in enumerate(rollout_trajectories):
             agent_trajectories = rollout_data
-            for agent_id, trajectory in agent_trajectories.items():
+            for agent_id, trajectory_data in agent_trajectories.items():
                 # Filter by dynamic agents if specified
                 if dynamic_agent_ids is not None and agent_id not in dynamic_agent_ids:
                     continue
-                trajectory = np.array(trajectory)
+                trajectory = np.array(trajectory_data['positions'])
                 if len(trajectory) > 1 and len(trajectory.shape) == 2:
                     alpha = 0.5 if len(rollout_trajectories) > 1 else 0.8
                     ax.plot(trajectory[:, 0], trajectory[:, 1], 

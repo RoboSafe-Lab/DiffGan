@@ -381,19 +381,20 @@ class IRLFeatureExtractor:
                 agents_per_rollout = {}
                 
                 # Get agent IDs
-                agent_ids = np.asarray(buffer['track_id'])
-                        
-                unique_agent_ids = agent_ids[:, 0]  # [num_agents, timesteps], get first column for unique IDs
+                agent_ids = np.asarray(buffer['track_id'])                        
+                unique_agent_ids = agent_ids[:, 0].tolist()  # [num_agents, timesteps], get first column for unique IDs
                 
                 # Get centroid data
-                if 'centroid' in buffer:
-                    centroids = np.asarray(buffer['centroid'])
+                centroids = np.asarray(buffer['centroid'])
+                yaws = np.asarray(buffer['yaw'])
                     
-                    # Create dictionary with agent_id as key for a rollout
-                    unique_agent_ids = unique_agent_ids.tolist()
-                    for i, unique_agent_id in enumerate(unique_agent_ids):
-                        if unique_agent_id not in agents_per_rollout:
-                            agents_per_rollout[unique_agent_id] = centroids[i]
+                # Create dictionary with agent_id as key for a rollout
+                for i, unique_agent_id in enumerate(unique_agent_ids):
+                    if unique_agent_id not in agents_per_rollout:
+                        agents_per_rollout[unique_agent_id] = {
+                            'positions': centroids[i],
+                            'yaw': yaws[i]
+                        }
 
                 if agents_per_rollout:
                     agents_trajectories_all_rollouts.append(agents_per_rollout)
@@ -421,9 +422,13 @@ class IRLFeatureExtractor:
             
             gt_trajectories = {}
             
-            # Step 1: Extract gt trajectories for each agent
+            # Step 1: Extract gt trajectories for each agent with full state info
             for agent_idx, (agent, agent_name) in enumerate(zip(agents, agent_names)):           
                 agent_positions = []
+                agent_velocities = []
+                agent_accelerations = []
+                agent_headings = []
+                agent_speeds = []
 
                 for frame_offset in range(self.config.horizon):
                     frame_idx = start_frame + frame_offset
@@ -447,15 +452,36 @@ class IRLFeatureExtractor:
                         else:
                             state_np = np.array(state)
                         
-                        # Extract x, y position
-                        agent_positions.append([float(state_np[0]), float(state_np[1])])
+                        # Extract all state components
+                        # StateArrayXYXdYdXddYddSC format: [x, y, vx, vy, ax, ay, sin_h, cos_h]
+                        x, y = float(state_np[0]), float(state_np[1])
+                        vx, vy = float(state_np[2]), float(state_np[3])
+                        ax, ay = float(state_np[4]), float(state_np[5])
+                        sin_h, cos_h = float(state_np[6]), float(state_np[7])
+                        
+                        # Compute derived quantities
+                        speed = np.sqrt(vx**2 + vy**2)
+                        heading = np.arctan2(sin_h, cos_h)  # Convert from sin/cos to angle
+                        
+                        # Store all data
+                        agent_positions.append([x, y])
+                        agent_velocities.append([vx, vy])
+                        agent_accelerations.append([ax, ay])
+                        agent_speeds.append(speed)
+                        agent_headings.append(heading)
                     else:
                         # No data returned, skip frame
                         continue
 
                 # Only include agents with sufficient trajectory data
                 if len(agent_positions) >= 2:
-                    gt_trajectories[agent_idx] = np.array(agent_positions)                 
+                    gt_trajectories[agent_idx] = {
+                        'positions': np.array(agent_positions),
+                        'velocities': np.array(agent_velocities),
+                        'accelerations': np.array(agent_accelerations),
+                        'speeds': np.array(agent_speeds),
+                        'yaw': np.array(agent_headings)
+                    }                               
                 else:
                     print(f"      Agent {agent_name} (ID {agent_idx}): insufficient data ({len(agent_positions)} positions)")
                     
@@ -529,61 +555,120 @@ class IRLFeatureExtractor:
             dict with agent_id as key, features dict as value
         """
         feature_names = self.config.feature_names
-        dt = self.config.step_time
-        
-        # align all trajectories to common length
+        dt = self.config.step_time  
         all_ids = list(agent_trajectories_dict.keys())
-        lengths = [len(agent_trajectories_dict[aid]) for aid in all_ids]
+        
+        # Get minimum common length
+        lengths = []
+        for aid in all_ids:
+            data = agent_trajectories_dict[aid]
+            lengths.append(len(data['positions']))
         T = min(lengths)
+        
         if T < 2:
             return {}
+        
+        # Extract position and heading arrays
+        positions = []
+        velocities = []
+        accelerations = []
+        headings = []
+        speeds = []
+    
+        for aid in all_ids:
+            data = agent_trajectories_dict[aid]
+            # GT has all states, but rollouts only have positions and yaw
+            positions.append(data['positions'][:T])
+            headings.append(data['yaw'][:T])
+            
+            # Use direct data if available, otherwise compute
+            if 'velocities' in data and len(data['velocities']) >= T-1:
+                velocities.append(data['velocities'][:T-1])
+            if 'accelerations' in data and len(data['accelerations']) >= T-1:
+                accelerations.append(data['accelerations'][:T-1])
+            if 'headings' in data:
+                headings.append(data['headings'][:T])
+            if 'speeds' in data and len(data['speeds']) >= T-1:
+                speeds.append(data['speeds'][:T-1])
 
         # stack positions [A, T, 2]
-        pos = np.stack([agent_trajectories_dict[aid][:T] for aid in all_ids], axis=0).astype(np.float32)
+        pos = np.stack(positions, axis=0).astype(np.float32)
         A = pos.shape[0]
 
-        # velocities and speeds [A, T-1]
-        vel = np.diff(pos, axis=1) / dt
-        speed = np.linalg.norm(vel, axis=2)
-
-        # a_long and jerk_long
-        if speed.shape[1] > 1:
-            a_long = np.diff(speed, axis=1) / dt
-            jerk = np.diff(a_long, axis=1) / dt if a_long.shape[1] > 1 else np.zeros((A,0),dtype=np.float32)
+        # Use direct velocity data if available, otherwise compute
+        if velocities:
+            vel = np.stack(velocities, axis=0).astype(np.float32)  # [A, T-1, 2]
+            if speeds:
+                speed = np.stack(speeds, axis=0).astype(np.float32)  # [A, T-1]
+            else:
+                speed = np.linalg.norm(vel, axis=2)
         else:
-            a_long = np.zeros((A,0),dtype=np.float32)
-            jerk = np.zeros((A,0),dtype=np.float32)
+            # Fallback to position differences
+            vel = np.diff(pos, axis=1) / dt
+            speed = np.linalg.norm(vel, axis=2)
+
+        # Use direct acceleration data if available, otherwise compute
+        if accelerations:
+            # Direct acceleration in x,y components
+            acc_xy = np.stack(accelerations, axis=0).astype(np.float32)  # [A, T-1, 2]
+            
+            # Project to longitudinal direction using velocity
+            if vel.shape[1] > 0:
+                # Normalize velocity vectors
+                vel_norm = vel / (np.linalg.norm(vel, axis=2, keepdims=True) + 1e-8)
+                # Longitudinal acceleration = dot product of acceleration with velocity direction
+                a_long = np.sum(acc_xy * vel_norm, axis=2)  # [A, T-1]
+            else:
+                a_long = np.zeros((A, 0), dtype=np.float32)
+                
+            # Compute jerk from longitudinal acceleration
+            if a_long.shape[1] > 1:
+                jerk = np.diff(a_long, axis=1) / dt
+            else:
+                jerk = np.zeros((A, 0), dtype=np.float32)
+        else:
+            # Fallback: compute from speed
+            if speed.shape[1] > 1:
+                a_long = np.diff(speed, axis=1) / dt
+                jerk = np.diff(a_long, axis=1) / dt if a_long.shape[1] > 1 else np.zeros((A,0),dtype=np.float32)
+            else:
+                a_long = np.zeros((A,0),dtype=np.float32)
+                jerk = np.zeros((A,0),dtype=np.float32)
 
         # a_lateral
-        if vel.shape[1] > 1:
-            heading = np.arctan2(vel[...,1], vel[...,0])
-            heading_diff = np.diff(heading, axis=1)
-            heading_diff = np.where(heading_diff > np.pi, heading_diff - 2*np.pi, heading_diff)
-            heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
-            yaw_rate = heading_diff / dt
-            v_mid = 0.5*(speed[:,:-1] + speed[:,1:])
-            a_lat = yaw_rate * v_mid
+        heading_array = np.stack(headings, axis=0).astype(np.float32)  # [A, T]
+        heading_diff = np.diff(heading_array, axis=1)
+        # Handle angle wrapping
+        heading_diff = np.where(heading_diff > np.pi, heading_diff - 2*np.pi, heading_diff)
+        heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
+        yaw_rate = heading_diff / dt
+        
+        # Match dimensions for lateral acceleration
+        min_len = min(speed.shape[1], yaw_rate.shape[1])
+        if min_len > 0:
+            a_lat = yaw_rate[:, :min_len] * speed[:, :min_len]
         else:
             a_lat = np.zeros((A,0),dtype=np.float32)
 
-        # pairwise distances over TT = T-1
+        # pairwise distances - calculate for ALL agents, then extract dynamic agent results
         TT = speed.shape[1]
         pos_t = pos[:,:TT]
         dyn_set = set(dynamic_agent_ids)
         dyn_indices = [i for i, aid in enumerate(all_ids) if aid in dyn_set]
-        dyn_pos = pos_t[dyn_indices]     # [D, TT, 2]
-        # rel shape [A, A, TT, 2]
-        rel = dyn_pos[:, None, :, :] - pos_t[None, :, :, :]
-        dist = np.linalg.norm(rel, axis=3)                   # [A, A, TT]
-        # Mask self-distances where dynamic agent equals the compared agent
-        for d_idx, a_idx in enumerate(dyn_indices):
-            dist[d_idx, a_idx, :] = np.inf
-        # min_dist per agent/time -> [A, TT]
-        min_dis = np.clip(np.min(dist, axis=1), 0.0, 50.0)
-
-        # assemble only dynamic-agent features
-        agent_features = {}
         
+        # Calculate distances between ALL agents
+        min_dis_all = np.full((A, TT), np.inf, dtype=np.float32)        
+        for i in range(A):
+            # Distance from agent i to all other agents
+            rel = pos_t[i:i+1] - pos_t  # [1, TT, 2] - [A, TT, 2] -> [A, TT, 2]
+            dist = np.linalg.norm(rel, axis=2)  # [A, TT]
+            # Mask self-distance
+            dist[i] = np.inf
+            # Get minimum distance to any other agent
+            min_dis_all[i] = np.clip(np.min(dist, axis=0), 0.0, 50.0)
+        
+        # assemble only dynamic-agent features
+        agent_features = {}        
         for i, a_idx in enumerate(dyn_indices):
             aid = all_ids[a_idx]
             feats = {}
@@ -596,7 +681,7 @@ class IRLFeatureExtractor:
             if 'a_lateral' in feature_names:
                 feats['a_lateral'] = a_lat[a_idx]
             if 'min_dis' in feature_names:
-                feats['min_dis'] = min_dis[i]
+                feats['min_dis'] = min_dis_all[a_idx]
             agent_features[aid] = feats
         return agent_features
 
@@ -605,31 +690,24 @@ class IRLFeatureExtractor:
         """
         Check if a trajectory represents dynamic behavior using multiple criteria
         """
-        if len(trajectory) < 2:
-            return False
-        dt = self.config.step_time
-        
-        # Compute velocities
-        vel_vectors = np.diff(trajectory, axis=0) / dt
-        velocities = np.linalg.norm(vel_vectors, axis=1)
         
         # Criterion 1: Maximum velocity
-        max_velocity = np.max(velocities)
+        max_velocity = np.max(trajectory['speeds'])
         if max_velocity > self.config.min_velocity_threshold:
             return True
         
         # Criterion 2: Average velocity
-        avg_velocity = np.mean(velocities)
+        avg_velocity = np.mean(trajectory['speeds'])
         if avg_velocity > self.config.min_velocity_threshold * 0.5:
             return True
         
         # Criterion 3: Total distance traveled
-        total_distance = np.sum(np.linalg.norm(np.diff(trajectory, axis=0), axis=1))
+        total_distance = np.sum(np.linalg.norm(np.diff(trajectory['positions'], axis=0), axis=1))
         if total_distance > self.config.min_distance_threshold:
             return True
         
         # Criterion 4: End-to-end displacement
-        displacement = np.linalg.norm(trajectory[-1] - trajectory[0])
+        displacement = np.linalg.norm(trajectory['positions'][-1] - trajectory['positions'][0])
         if displacement > self.config.min_distance_threshold * 0.5:
             return True
         
