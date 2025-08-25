@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import pickle
 import os
+import wandb
 from MaxEntIRL.extract_features import IRLFeatureExtractor
 from MaxEntIRL.run_irl import MaxEntIRL
 from tbsim.configs.scene_edit_config import SceneEditingConfig
@@ -19,6 +20,38 @@ class AdversarialIRLDiffusion:
         self.theta_ema = None # EMA of theta for stability
         self.irl_norm_mean = None
         self.irl_norm_std = None
+        
+        # Initialize wandb
+        if self.config.use_wandb:
+            self.init_wandb()
+
+    def init_wandb(self):
+        """Initialize Weights & Biases logging"""
+        wandb_config = {
+            "num_iterations": self.config.num_iterations,
+            "theta_ema_beta": self.config.theta_ema_beta,
+            "guidance_weight": self.config.guidance_weight,
+            "step_time": self.config.step_time,
+            "num_scenes_to_evaluate": self.config.num_scenes_to_evaluate,
+            "num_rollouts": self.config.num_rollouts,
+            "horizon": self.config.horizon,
+            "feature_names": self.config.feature_names,
+            "policy_ckpt_dir": self.config.policy_ckpt_dir,
+            "policy_ckpt_key": self.config.policy_ckpt_key,
+            "env": self.config.env,
+            "eval_class": self.config.eval_class,
+        }
+        
+        wandb.init(
+            project=self.config.wandb_project,
+            entity=self.config.wandb_entity,
+            name=self.config.wandb_run_name,
+            tags=self.config.wandb_tags,
+            config=wandb_config,
+            reinit=True
+        )
+        
+        print(f"Initialized wandb project: {self.config.wandb_project}")
 
     def setup_environment(self):
         """Setup environment and models"""
@@ -66,7 +99,7 @@ class AdversarialIRLDiffusion:
             self.current_theta = self.get_reward_via_irl(generated_features)
 
             # Maintain an EMA of theta for smoother guidance
-            beta = getattr(self.config, "theta_ema_beta", 0.9)
+            beta = self.config.theta_ema_beta
             if self.current_theta is not None:
                 if self.theta_ema is None:
                     self.theta_ema = np.array(self.current_theta, dtype=float)
@@ -101,6 +134,20 @@ class AdversarialIRLDiffusion:
         irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations)
         learned_theta, training_log = irl.fit(features_list)
         
+        # Log IRL training progress to wandb
+        if self.config.use_wandb:
+            for i, (log_likelihood, feature_diff, human_likeness) in enumerate(zip(
+                training_log["average_log-likelihood"],
+                training_log["average_feature_difference"], 
+                training_log["average_human_likeness"]
+            )):
+                wandb.log({
+                    "irl/log_likelihood": log_likelihood,
+                    "irl/feature_difference": feature_diff,
+                    "irl/human_likeness": human_likeness,
+                    "irl/iteration": i + 1
+                }, commit=False)
+        
         # capture normalization stats for guidance
         self.irl_norm_mean = irl.norm_mean
         self.irl_norm_std = irl.norm_std
@@ -132,7 +179,7 @@ class AdversarialIRLDiffusion:
         # Create custom guidance based on learned reward
         reward_guidance = {
             'name': 'learned_reward_guidance',
-            'weight': getattr(self.config, "guidance_weight", 1.0),
+            'weight': self.config.guidance_weight,
             'params': {
                 'reward_weights': theta.tolist(), 
                 'feature_names': feature_names,
@@ -190,6 +237,23 @@ class AdversarialIRLDiffusion:
         
         self.training_history.append(metrics)
         
+        # Log to wandb
+        if self.config.use_wandb:
+            wandb_metrics = {
+                "iteration": iteration,
+                "reward/magnitude": metrics['reward_magnitude'],
+                "quality/collision_rate": quality_metrics['collision_rate'],
+                "quality/rollout_collision_rate": quality_metrics['rollout_collision_rate'],
+                "quality/expert_similarity": quality_metrics['expert_similarity'],
+                "quality/diversity": quality_metrics['diversity'],
+            }
+            
+            # Log individual reward weights
+            if self.current_theta is not None:
+                for i, (weight, feature_name) in enumerate(zip(self.current_theta, self.config.feature_names)):
+                    wandb_metrics[f"theta/{feature_name}"] = weight
+            wandb.log(wandb_metrics)
+            
         # Save checkpoint
         self.save_checkpoint(iteration)
         

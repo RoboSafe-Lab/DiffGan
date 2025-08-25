@@ -12,24 +12,24 @@ class FeatureExtractionConfig:
     policy_ckpt_key: str = "iter100000.ckpt"        # Full path with checkpoints/ prefix
     
     # Output settings
-    output_dir: str = "irl_features_output"
+    output_dir: str = "./MaxEntIRL/irl_output"
     save_features: bool = False  # Whether to save extracted features
-    
+
     # feature names
     feature_names: List[str] = field(default_factory=lambda: 
-        ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'min_dis'])
+        ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'front_thw', 'left_thw', 'right_thw'])
     
     # Scene selection
     # scene_indices: List[int] = field(default_factory=lambda: [0]) # Default to first scene
    
-    num_scenes_to_evaluate: int = 1
+    num_scenes_to_evaluate: int = 100
     eval_scenes: List[int] = field(default_factory=lambda: np.arange(0, 100, 10).tolist())
     num_scenes_per_batch: int = 1
     num_sim_per_scene: int = 1
-    
-    debug: bool = False  # Debug mode for additional logging
-    
-    filter_dynamic: bool = True  # Filter for dynamic agents only    
+
+    debug: bool = False  # Debug mode for visualization
+
+    filter_dynamic: bool = True  # Filter for dynamic agents only
     min_velocity_threshold: float = 2.0 # Minimum velocity threshold for filtering agents
     min_distance_threshold: float = 5.0  # Minimum distance threshold for filtering agents
 
@@ -73,6 +73,15 @@ class FeatureExtractionConfig:
 
     # Number of training iterations of DiffusionGan
     num_iterations: int = 100
+    theta_ema_beta: float = 0.9
+    guidance_weight: float = 1.0
+    
+    # Wandb configuration
+    use_wandb: bool = True
+    wandb_project: str = "adversarial-irl-diffusion"
+    wandb_entity: str = None  # Your wandb username/team
+    wandb_run_name: str = None  # Will be auto-generated if None
+    wandb_tags: List[str] = field(default_factory=lambda: ["adversarial", "irl", "diffusion"])
 
 # Default configuration instance
 default_config = FeatureExtractionConfig()
