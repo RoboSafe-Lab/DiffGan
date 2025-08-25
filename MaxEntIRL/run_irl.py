@@ -51,6 +51,9 @@ class MaxEntIRL:
         Convert a feature dict (time-series) to a fixed-length vector in self.feature_names order.
         Aggregation = mean over time. normalized by z-score.
         """
+        # Define which features should NOT be normalized
+        no_norm_features = {'front_thw', 'left_thw', 'right_thw'}
+
         if isinstance(features, dict):
             vals = []
             for name in self.feature_names:
@@ -61,7 +64,13 @@ class MaxEntIRL:
             vec = np.asarray(features, dtype=float)
             
         if apply_norm and self.norm_mean is not None and self.norm_std is not None:
-            vec = (vec - self.norm_mean) / (self.norm_std + self.eps)
+            # Apply normalization selectively
+            normalized_vec = vec.copy()
+            for i, feature_name in enumerate(self.feature_names):
+                if feature_name not in no_norm_features:
+                    normalized_vec[i] = (vec[i] - self.norm_mean[i]) / (self.norm_std[i] + self.eps)
+                # Proximity features remain unchanged (no normalization)
+            vec = normalized_vec
         return vec
 
     def _compute_normalization_stats(self, features: List[Any]) -> tuple[np.ndarray, np.ndarray]:

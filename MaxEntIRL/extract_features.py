@@ -398,7 +398,7 @@ class IRLFeatureExtractor:
 
                 if agents_per_rollout:
                     agents_trajectories_all_rollouts.append(agents_per_rollout)
-                    print(f"      Extracted trajectories for {len(agents_per_rollout)} agents from rollout {rollout_idx}")
+        print(f"      Extracted trajectories for agents from rollouts")
 
         return agents_trajectories_all_rollouts
 
@@ -554,30 +554,34 @@ class IRLFeatureExtractor:
         Returns:
             dict with agent_id as key, features dict as value
         """
-        feature_names = self.config.feature_names
-        dt = self.config.step_time  
-        all_ids = list(agent_trajectories_dict.keys())
-        
-        # Get minimum common length
-        lengths = []
-        for aid in all_ids:
-            data = agent_trajectories_dict[aid]
-            lengths.append(len(data['positions']))
-        T = min(lengths)
-        
-        if T < 2:
+        if not dynamic_agent_ids or not agent_trajectories_dict:
             return {}
         
-        # Extract position and heading arrays
+        feature_names = self.config.feature_names
+        dt = self.config.step_time  
+        
+        # Step 1: Filter to only dynamic agents that exist in trajectories
+        valid_dynamic_agents = [aid for aid in dynamic_agent_ids if aid in agent_trajectories_dict]
+        if not valid_dynamic_agents:
+            return {}
+        
+        # Step 2: Get minimum trajectory length across dynamic agents only
+        dynamic_lengths = [len(agent_trajectories_dict[aid]['positions']) for aid in valid_dynamic_agents]
+        T = min(dynamic_lengths)
+        if T < 2:
+            print(f"    Insufficient trajectory length: T={T}")
+            return {}
+
+        # Step 3: Extract data arrays for dynamic agents only
         positions = []
         velocities = []
         accelerations = []
         headings = []
         speeds = []
     
-        for aid in all_ids:
+        for aid in valid_dynamic_agents:
             data = agent_trajectories_dict[aid]
-            # GT has all states, but rollouts only have positions and yaw
+            # Truncate to common length T
             positions.append(data['positions'][:T])
             headings.append(data['yaw'][:T])
             
@@ -586,20 +590,19 @@ class IRLFeatureExtractor:
                 velocities.append(data['velocities'][:T-1])
             if 'accelerations' in data and len(data['accelerations']) >= T-1:
                 accelerations.append(data['accelerations'][:T-1])
-            if 'headings' in data:
-                headings.append(data['headings'][:T])
             if 'speeds' in data and len(data['speeds']) >= T-1:
                 speeds.append(data['speeds'][:T-1])
+                
+        # Step 4: Stack arrays for dynamic agents only
+        pos = np.stack(positions, axis=0).astype(np.float32) # [D, T, 2]
+        heading_array = np.stack(headings, axis=0).astype(np.float32)  # [D, T]
+        D = pos.shape[0] # Number of dynamic agents
 
-        # stack positions [A, T, 2]
-        pos = np.stack(positions, axis=0).astype(np.float32)
-        A = pos.shape[0]
-
-        # Use direct velocity data if available, otherwise compute
+        # Step 5: Compute or use velocity data
         if velocities:
-            vel = np.stack(velocities, axis=0).astype(np.float32)  # [A, T-1, 2]
+            vel = np.stack(velocities, axis=0).astype(np.float32)  # [D, T-1, 2]
             if speeds:
-                speed = np.stack(speeds, axis=0).astype(np.float32)  # [A, T-1]
+                speed = np.stack(speeds, axis=0).astype(np.float32)  # [D, T-1]
             else:
                 speed = np.linalg.norm(vel, axis=2)
         else:
@@ -607,82 +610,185 @@ class IRLFeatureExtractor:
             vel = np.diff(pos, axis=1) / dt
             speed = np.linalg.norm(vel, axis=2)
 
-        # Use direct acceleration data if available, otherwise compute
+        # Step 6: Compute longitudinal acceleration and jerk
         if accelerations:
             # Direct acceleration in x,y components
-            acc_xy = np.stack(accelerations, axis=0).astype(np.float32)  # [A, T-1, 2]
-            
+            acc_xy = np.stack(accelerations, axis=0).astype(np.float32)  # [D, T-1, 2]
+
             # Project to longitudinal direction using velocity
             if vel.shape[1] > 0:
                 # Normalize velocity vectors
                 vel_norm = vel / (np.linalg.norm(vel, axis=2, keepdims=True) + 1e-8)
                 # Longitudinal acceleration = dot product of acceleration with velocity direction
-                a_long = np.sum(acc_xy * vel_norm, axis=2)  # [A, T-1]
+                a_long = np.sum(acc_xy * vel_norm, axis=2)  # [D, T-1]
             else:
-                a_long = np.zeros((A, 0), dtype=np.float32)
-                
-            # Compute jerk from longitudinal acceleration
-            if a_long.shape[1] > 1:
-                jerk = np.diff(a_long, axis=1) / dt
-            else:
-                jerk = np.zeros((A, 0), dtype=np.float32)
+                a_long = np.zeros((D, 0), dtype=np.float32)
+
         else:
             # Fallback: compute from speed
             if speed.shape[1] > 1:
-                a_long = np.diff(speed, axis=1) / dt
-                jerk = np.diff(a_long, axis=1) / dt if a_long.shape[1] > 1 else np.zeros((A,0),dtype=np.float32)
+                a_long = np.diff(speed, axis=1) / dt                
             else:
-                a_long = np.zeros((A,0),dtype=np.float32)
-                jerk = np.zeros((A,0),dtype=np.float32)
+                a_long = np.zeros((D, 0), dtype=np.float32)
 
-        # a_lateral
-        heading_array = np.stack(headings, axis=0).astype(np.float32)  # [A, T]
-        heading_diff = np.diff(heading_array, axis=1)
-        # Handle angle wrapping
-        heading_diff = np.where(heading_diff > np.pi, heading_diff - 2*np.pi, heading_diff)
-        heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
-        yaw_rate = heading_diff / dt
-        
-        # Match dimensions for lateral acceleration
-        min_len = min(speed.shape[1], yaw_rate.shape[1])
-        if min_len > 0:
-            a_lat = yaw_rate[:, :min_len] * speed[:, :min_len]
+        # Compute jerk
+        if a_long.shape[1] > 1:
+            jerk = np.diff(a_long, axis=1) / dt  # [D, T-3]
         else:
-            a_lat = np.zeros((A,0),dtype=np.float32)
+            jerk = np.zeros((D, 0), dtype=np.float32)
+            
+        # Step 7: Compute lateral acceleration using heading data        
+        if heading_array.shape[1] > 1:
+            heading_diff = np.diff(heading_array, axis=1)
+            # Handle angle wrapping
+            heading_diff = np.where(heading_diff > np.pi, heading_diff - 2*np.pi, heading_diff)
+            heading_diff = np.where(heading_diff < -np.pi, heading_diff + 2*np.pi, heading_diff)
+            yaw_rate = heading_diff / dt
+        
+            # Lateral acceleration = yaw_rate * speed
+            min_len = min(speed.shape[1], yaw_rate.shape[1])
+            if min_len > 0:
+                a_lat = yaw_rate[:, :min_len] * speed[:, :min_len]
+            else:
+                a_lat = np.zeros((D,0),dtype=np.float32)
+        else:
+            a_lat = np.zeros((D,0),dtype=np.float32)
 
-        # pairwise distances - calculate for ALL agents, then extract dynamic agent results
+        # Step 8: Compute TIME HEADWAY for front, left, right directions
         TT = speed.shape[1]
-        pos_t = pos[:,:TT]
-        dyn_set = set(dynamic_agent_ids)
-        dyn_indices = [i for i, aid in enumerate(all_ids) if aid in dyn_set]
+        pos_t = pos[:, :TT, :]  # [D, TT, 2]
+        speed_t = speed[:, :TT]  # [D, TT]
+        heading_t = heading_array[:, :TT]  # [D, TT]
+       
+        # Get ALL agent trajectories for THW computation
+        all_agent_positions = []
+        all_agent_ids = list(agent_trajectories_dict.keys())
+
+        for aid in all_agent_ids:
+            data = agent_trajectories_dict[aid]
+            # Truncate to same length as dynamic agents
+            agent_pos = data['positions'][:min(T, len(data['positions']))]
+            if len(agent_pos) >= TT:
+                all_agent_positions.append(agent_pos[:TT])
+            else:
+                # Pad with last position if trajectory is shorter
+                padded_pos = np.zeros((TT, 2))
+                padded_pos[:len(agent_pos)] = agent_pos
+                padded_pos[len(agent_pos):] = agent_pos[-1] if len(agent_pos) > 0 else [0, 0]
+                all_agent_positions.append(padded_pos)
+            
+            
+        all_pos = np.stack(all_agent_positions, axis=0).astype(np.float32)  # [A_all, TT, 2]
         
-        # Calculate distances between ALL agents
-        min_dis_all = np.full((A, TT), np.inf, dtype=np.float32)        
-        for i in range(A):
-            # Distance from agent i to all other agents
-            rel = pos_t[i:i+1] - pos_t  # [1, TT, 2] - [A, TT, 2] -> [A, TT, 2]
-            dist = np.linalg.norm(rel, axis=2)  # [A, TT]
-            # Mask self-distance
-            dist[i] = np.inf
-            # Get minimum distance to any other agent
-            min_dis_all[i] = np.clip(np.min(dist, axis=0), 0.0, 50.0)
+        # Initialize time headway arrays
+        front_exp_thw_all = np.zeros((D, TT), dtype=np.float32)
+        left_exp_thw_all = np.zeros((D, TT), dtype=np.float32)
+        right_exp_thw_all = np.zeros((D, TT), dtype=np.float32)
         
-        # assemble only dynamic-agent features
-        agent_features = {}        
-        for i, a_idx in enumerate(dyn_indices):
-            aid = all_ids[a_idx]
+        # Compute Time Headway (THW) for each dynamic agent
+        for i, dyn_aid in enumerate(valid_dynamic_agents):
+            dyn_idx_in_all = all_agent_ids.index(dyn_aid)
+            
+            for t in range(TT):
+                ego_pos = pos_t[i, t]  # [2]
+                ego_speed = speed_t[i, t]  # scalar
+                ego_heading = heading_t[i, t]  # scalar
+            
+                if ego_speed < 0.1:  # If ego is nearly stationary, skip THW computation
+                    continue
+                
+                # Compute forward and side unit vectors for ego agent
+                forward_vec = np.array([np.cos(ego_heading), np.sin(ego_heading)])  # [2]
+                side_vec = np.array([-np.sin(ego_heading), np.cos(ego_heading)])    # [2] (left is positive)
+            
+                # Track minimum THW for each direction at this timestep
+                min_front_thw = float('inf')
+                min_left_thw = float('inf')
+                min_right_thw = float('inf')
+                
+                # Check all other agents
+                for j, other_aid in enumerate(all_agent_ids):
+                    if j == dyn_idx_in_all:  # Skip self
+                        continue
+                    
+                    other_pos = all_pos[j, t]  # [2]
+                    
+                    # Vector from ego to other agent
+                    rel_pos = other_pos - ego_pos  # [2]
+                    distance = np.linalg.norm(rel_pos)
+
+                    # Project relative position onto ego's coordinate system
+                    longitudinal_dist = np.dot(rel_pos, forward_vec)  # Forward/backward distance
+                    lateral_dist = np.dot(rel_pos, side_vec)          # Left/right distance
+                    
+                    # Directional classification with geometric thresholds
+                    front_threshold = 1.0    # Agent must be at least 1m ahead
+                    side_threshold = 0.5     # Agent must be at least 0.5m to the side
+                    angle_threshold = 0.7    # ~40 degrees (cos(40°) ≈ 0.77)
+                    
+                    # Calculate THW for this agent
+                    thw = distance / ego_speed
+                    
+                    # Calculate angle factor for front classification
+                    if distance > 0:
+                        forward_ratio = longitudinal_dist / distance
+                    else:
+                        forward_ratio = 0
+                        
+                    # Front: agent is ahead and within reasonable angle
+                    if (longitudinal_dist > front_threshold and 
+                        forward_ratio > angle_threshold and 
+                        abs(lateral_dist) < distance * 0.6):  # Not too far to the side
+                        
+                        min_front_thw = min(min_front_thw, thw)
+                    
+                    # Left: agent is to the left side (lateral_dist > 0)
+                    if lateral_dist > side_threshold:
+                        min_left_thw = min(min_left_thw, thw)
+                    
+                    # Right: agent is to the right side (lateral_dist < 0)
+                    if lateral_dist < -side_threshold:
+                        min_right_thw = min(min_right_thw, thw)
+
+                # Set minimum THW for each direction
+                if min_front_thw != float('inf'):
+                    front_exp_thw_all[i, t] = np.exp(-min_front_thw)
+                if min_left_thw != float('inf'):
+                    left_exp_thw_all[i, t] = np.exp(-min_left_thw)
+                if min_right_thw != float('inf'):
+                    right_exp_thw_all[i, t] = np.exp(-min_right_thw)
+
+            # Debug info
+            avg_front = np.mean(front_exp_thw_all[i])
+            avg_left = np.mean(left_exp_thw_all[i])
+            avg_right = np.mean(right_exp_thw_all[i])
+            print(f"    Agent {dyn_aid}: Avg THW - Front: {avg_front:.1f}s, Left: {avg_left:.1f}s, Right: {avg_right:.1f}s")
+
+        
+        # Step 9: Assemble features for each dynamic agent
+        agent_features = {}
+        for i, aid in enumerate(valid_dynamic_agents):  # Fix: use valid_dynamic_agents directly
             feats = {}
-            if 'velocity' in feature_names:
-                feats['velocity'] = speed[a_idx]
-            if 'a_long' in feature_names:
-                feats['a_long'] = a_long[a_idx]
-            if 'jerk_long' in feature_names:
-                feats['jerk_long'] = jerk[a_idx]
-            if 'a_lateral' in feature_names:
-                feats['a_lateral'] = a_lat[a_idx]
-            if 'min_dis' in feature_names:
-                feats['min_dis'] = min_dis_all[a_idx]
+            
+            if 'velocity' in feature_names and speed.shape[1] > 0:
+                feats['velocity'] = speed[i]
+            if 'a_long' in feature_names and a_long.shape[1] > 0:
+                feats['a_long'] = a_long[i]
+            if 'jerk_long' in feature_names and jerk.shape[1] > 0:
+                feats['jerk_long'] = jerk[i]
+            if 'a_lateral' in feature_names and a_lat.shape[1] > 0:
+                feats['a_lateral'] = a_lat[i]
+            
+            # Time Headway features
+            if 'front_thw' in feature_names and TT > 0:
+                feats['front_thw'] = front_exp_thw_all[i]
+            if 'left_thw' in feature_names and TT > 0:
+                feats['left_thw'] = left_exp_thw_all[i]
+            if 'right_thw' in feature_names and TT > 0:
+                feats['right_thw'] = right_exp_thw_all[i]
+
             agent_features[aid] = feats
+    
         return agent_features
 
 
