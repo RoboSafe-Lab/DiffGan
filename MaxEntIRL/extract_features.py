@@ -102,6 +102,11 @@ class IRLFeatureExtractor:
             scene_i += self.config.num_scenes_per_batch
             print(f'Processing scene_indices: {scene_indices}')
             
+            # Add check for empty scene_indices BEFORE calling reset
+            if not scene_indices:
+                print('No more scenes to process, breaking...')
+                break
+            
             # Reset environment to get scene information
             scenes_valid = self.env.reset(scene_indices=scene_indices, start_frame_index=None)
             scene_indices = [si for si, sval in zip(scene_indices, scenes_valid) if sval]
