@@ -206,14 +206,27 @@ class EnvUnifiedSimulation(BaseEnv, BatchedEnv):
         self._cached_raw_observation = None
         self._done = False
 
+        # obs_keys_to_log = [
+        #     "centroid",
+        #     "yaw",
+        #     "extent",
+        #     "world_from_agent",
+        #     "scene_index",
+        #     "track_id",
+        #     "map_names",
+        # ]
         obs_keys_to_log = [
             "centroid",
             "yaw",
+            "curr_speed",
             "extent",
             "world_from_agent",
             "scene_index",
             "track_id",
+            "drivable_map",
+            "raster_from_world",
             "map_names",
+            "agent_name"
         ]
         info_keys_to_log = [
             "action_samples",
@@ -420,6 +433,7 @@ class EnvUnifiedSimulation(BaseEnv, BatchedEnv):
             obs_skimp["agents"]["image"] = obs["image"]
             obs_skimp["agents"]["raster_from_world"] = obs["raster_from_world"]
             obs_skimp["agents"]["map_names"] = obs["map_names"]
+            obs_skimp["agents"]['drivable_map'] = obs['drivable_map']
             self._add_per_step_metrics(obs_skimp["agents"], self._frame_index+action_index)
             if self._log_data:
                 # log_agents_info = action_info.copy()

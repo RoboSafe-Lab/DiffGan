@@ -175,7 +175,7 @@ class RolloutLogger(object):
                         for ts in range(self._scene_ts[si]):
                             ti_k.append(self._agent_data_by_scene[si][k][ti][ts] if ts in self._agent_data_by_scene[si][k][ti] else np.ones_like(default_val)*np.nan)
                             default_val = ti_k[-1]
-                        if k in ['map_names']:
+                        if k in ['map_names','agent_name']:
                             serialized[si][k].append(ti_k)
                         else:
                             if not all(elem.shape==ti_k[0].shape for elem in ti_k):
@@ -201,7 +201,7 @@ class RolloutLogger(object):
                                     serialized[si][k].append(np.concatenate(ti_k,axis=0)[np.newaxis,:])
                     else:
                         serialized[si][k].append(np.zeros_like(serialized[si][k][-1]))
-                if k in ['map_names']:
+                if k in ['map_names','agent_name']:
                     pass
                 else:
                     if not all(elem.shape==serialized[si][k][0].shape for elem in serialized[si][k]):

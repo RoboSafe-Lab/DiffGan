@@ -172,13 +172,26 @@ class EnvUnifiedSimulation(BaseEnv, BatchedEnv):
         self._cached_observation = None
         self._done = False
 
+        # obs_keys_to_log = [
+        #     "centroid",
+        #     "yaw",
+        #     "extent",
+        #     "world_from_agent",
+        #     "scene_index",
+        #     "track_id"
+        # ]
         obs_keys_to_log = [
             "centroid",
             "yaw",
+            "curr_speed",
             "extent",
             "world_from_agent",
             "scene_index",
-            "track_id"
+            "track_id",
+            "drivable_map",
+            "raster_from_world",
+            "map_names",
+            "agent_name"
         ]
         self.logger = RolloutLogger(obs_keys=obs_keys_to_log)
 
