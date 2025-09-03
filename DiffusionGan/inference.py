@@ -1,57 +1,37 @@
+import json
+import os
+import pickle
+from typing import Optional
+
 import numpy as np
 import torch
-import pickle
-import os
-import wandb
-from MaxEntIRL.extract_features import IRLFeatureExtractor
-from MaxEntIRL.run_irl import MaxEntIRL
-from tbsim.configs.scene_edit_config import SceneEditingConfig
-from MaxEntIRL.irl_config import default_config
 
-class AdversarialIRLDiffusion:
-    def __init__(self, config):
+from MaxEntIRL.extract_features import IRLFeatureExtractor
+from MaxEntIRL.irl_config import default_config
+from scripts.scene_editor import dump_episode_buffer
+from tbsim.configs.scene_edit_config import SceneEditingConfig
+from tbsim.policies.wrappers import RolloutWrapper
+from tbsim.utils.scene_edit_utils import guided_rollout, compute_heuristic_guidance, merge_guidance_configs
+import tbsim.utils.tensor_utils as TensorUtils
+
+class AdversarialIRLDiffusionInference:
+
+    def __init__(self, config, pkl_dir, hdf5_dir):
         self.config = config
-        self.extractor: IRLFeatureExtractor | None = None
+        self.extractor: Optional[IRLFeatureExtractor] = None
         self.env = None
         self.policy = None
         self.policy_model = None
         self.current_theta = None
         self.training_history = []
-        self.theta_ema = None # EMA of theta for stability
+        self.theta_ema = None  # EMA of theta for stability
         self.irl_norm_mean = None
         self.irl_norm_std = None
-        
-        # Initialize wandb
-        if self.config.use_wandb:
-            self.init_wandb()
+        self.pkl_dir = pkl_dir
+        self.hdf5_dir = hdf5_dir
 
-    def init_wandb(self):
-        """Initialize Weights & Biases logging"""
-        wandb_config = {
-            "num_iterations": self.config.num_iterations,
-            "theta_ema_beta": self.config.theta_ema_beta,
-            "guidance_weight": self.config.guidance_weight,
-            "step_time": self.config.step_time,
-            "num_scenes_to_evaluate": self.config.num_scenes_to_evaluate,
-            "num_rollouts": self.config.num_rollouts,
-            "horizon": self.config.horizon,
-            "feature_names": self.config.feature_names,
-            "policy_ckpt_dir": self.config.policy_ckpt_dir,
-            "policy_ckpt_key": self.config.policy_ckpt_key,
-            "env": self.config.env,
-            "eval_class": self.config.eval_class,
-        }
-        
-        wandb.init(
-            project=self.config.wandb_project,
-            entity=self.config.wandb_entity,
-            name=self.config.wandb_run_name,
-            tags=self.config.wandb_tags,
-            config=wandb_config,
-            reinit=True
-        )
-        
-        print(f"Initialized wandb project: {self.config.wandb_project}")
+        self.setup_environment()
+
 
     def setup_environment(self):
         """Setup environment and models"""
@@ -82,84 +62,42 @@ class AdversarialIRLDiffusion:
         self.policy = self.extractor.policy
         self.policy_model = self.extractor.policy_model
         print("Environment and models setup complete")
-    
-    def inference_adversarial(self, num_iterations=10):
-        """
-        Main adversarial inference loop
-        Using learned reward to guide the generation of Diffusion models
-        """
-
-        # load learned reward
-        reward = load ('irl_ouput')
-           
-        # Step 3: Apply learned reward as guidance
-        if iteration < num_iterations - 1:
-            self.update_diffusion_model_with_reward()
-            
 
 
-    
-    def generate_trajectories_with_current_model(self):
-        """Generate trajectories using current diffusion model state"""
-        print("Generating trajectories with current diffusion model...")
-
-        if self.extractor is None:
-            raise RuntimeError("Extractor is not initialized. Call setup_environment() first.")
-        # Extract features using current extractor (env, policy, model inside)
-        features = self.extractor.extract_irl_features_from_all_frames()
-        return features
-
-
-    def update_diffusion_model_with_reward(self):
-        """Update diffusion model using learned reward as guidance (Generator step)"""
-        print("Updating diffusion model with learned reward guidance...")
-        
-        # Convert learned reward to guidance configuration
-        reward_guidance = self.convert_reward_to_guidance()
-        
-        # Apply reward-based guidance to diffusion model
-        self.apply_reward_guidance(reward_guidance)
-    
     def convert_reward_to_guidance(self):
         """Convert learned reward weights to diffusion guidance"""
-        if self.current_theta is None:
-            return None        
-        
-        # Use EMA weights for stability (fallback to current if ema missing)
-        theta = self.theta_ema if self.theta_ema is not None else np.array(self.current_theta, dtype=float)
-        
+
         # Define feature names to match your IRL features
         feature_names = self.config.feature_names
-               
+
         # Create custom guidance based on learned reward
         reward_guidance = {
             'name': 'learned_reward_guidance',
             'weight': self.config.guidance_weight,
             'params': {
-                'reward_weights': theta.tolist(), 
+                'reward_weights': self.current_theta.tolist(),
                 'feature_names': feature_names,
                 'dt': self.config.step_time,
-                'norm_mean': self.irl_norm_mean.tolist(),
-                'norm_std': self.irl_norm_std.tolist(),
+                # 'norm_mean': self.irl_norm_mean.tolist(),
+                # 'norm_std': self.irl_norm_std.tolist(),
             },
             'agents': None  # Apply to all agents
         }
 
         return reward_guidance
 
-
     def apply_reward_guidance(self, reward_guidance):
         """Apply learned reward as guidance to diffusion model"""
         if reward_guidance is None:
             print("No reward guidance to apply")
             return
-        
+
         # Attach to eval_cfg so extractor’s guided_rollout picks it up
         if self.env is not None and hasattr(self.env, "eval_cfg"):
             eval_cfg = self.env.eval_cfg
             if hasattr(eval_cfg, "edits"):
                 eval_cfg.apply_guidance = True
-                
+
                 if not hasattr(eval_cfg.edits, "guidance_config") or eval_cfg.edits.guidance_config is None:
                     eval_cfg.edits.guidance_config = []
                 # Flatten per-scene format if present
@@ -176,28 +114,253 @@ class AdversarialIRLDiffusion:
                 eval_cfg.edits.guidance_config = new_scenes_cfg
                 print(f"Applied reward guidance with weights: {reward_guidance['params']['reward_weights']}")
 
-    def save_inference_results(self):
-        # saving the inferencing results for subsequently metrics analysis
-        pass
-    
-   
-        
-        
+    def update_diffusion_model_with_reward(self):
+        """Update diffusion model using learned reward as guidance (Generator step)"""
+        print("Updating diffusion model with learned reward guidance...")
+
+        # Convert learned reward to guidance configuration
+        reward_guidance = self.convert_reward_to_guidance()
+
+        # Apply reward-based guidance to diffusion model
+        self.apply_reward_guidance(reward_guidance)
+
+
+    def load_reward_from_pkl(self):
+        with open(self.pkl_dir, 'rb') as f:
+            data = pickle.load(f)
+            return data['theta']
+
+
+    def run_and_save_results(self):
+        scene_i = 0
+        eval_scenes = self.config.eval_scenes
+        result_stats = None
+        while scene_i < self.config.num_scenes_to_evaluate:
+            scene_indices = eval_scenes[scene_i: scene_i + self.config.num_scenes_per_batch]
+            scene_i += self.config.num_scenes_per_batch
+            print(f'Processing scene_indices: {scene_indices}')
+
+            # Add check for empty scene_indices BEFORE calling reset
+            if not scene_indices:
+                print('No more scenes to process, breaking...')
+                break
+
+            # Reset environment to get scene information
+            scenes_valid = self.env.reset(scene_indices=scene_indices, start_frame_index=None)
+            scene_indices = [si for si, sval in zip(scene_indices, scenes_valid) if sval]
+
+            if len(scene_indices) == 0:
+                print('No valid scenes in this batch, skipping...')
+                torch.cuda.empty_cache()
+                continue
+
+            # Determine start frames for each scene
+            start_frame_index: list[list[int]] = []
+            valid_scene_indices = []
+            valid_scene_wrappers = []
+
+            # History frames needed by policy
+            history_frames = getattr(self.env.exp_config.algo, "history_num_frames", 0)
+
+            # Multiple sims per scene: spread starts across valid range
+            for si_idx, scene_idx in enumerate(scene_indices):
+                print(f"Processing scene {scene_idx} (index {si_idx})")
+
+                current_scene = self.env._current_scenes[si_idx].scene
+                sframe = history_frames + 1
+                # Ensure there's enough horizon for rollout
+                eframe = current_scene.length_timesteps - self.config.horizon
+                if eframe <= sframe:
+                    print(
+                        f"Scene {scene_idx}: insufficient length (length={current_scene.length_timesteps}, need at least {sframe + self.config.horizon})")
+                    continue
+                valid_scene_indices.append(scene_idx)
+                valid_scene_wrappers.append(self.env._current_scenes[si_idx])
+
+                if self.config.num_sim_per_scene > 1:
+                    # Multiple simulations per scene - spread them across the scene
+                    scene_frame_inds = np.linspace(sframe, eframe, num=self.config.num_sim_per_scene,
+                                                   dtype=int).tolist()
+                    start_frame_index.append(scene_frame_inds)
+                    print(f"Scene {scene_idx}: frames {sframe} to {eframe}, selected starts: {scene_frame_inds}")
+                else:
+                    # Single sim per scene: default start
+                    start_frame_index.append([sframe])
+                    print(f"Scene {scene_idx}: using start frame {sframe}")
+
+            # Update scene_indices to only include valid scenes
+            scene_indices = valid_scene_indices
+            self.env._current_scenes = valid_scene_wrappers
+
+            # Now scene_indices and start_frame_index have the same length
+            assert len(scene_indices) == len(
+                start_frame_index), f"Mismatch: {len(scene_indices)} scenes vs {len(start_frame_index)} start_frame entries"
+
+            # Process each scene with its determined start frames
+            for si_idx, scene_idx in enumerate(scene_indices):
+                scene_features = []
+                scene_start_frames = start_frame_index[si_idx]
+                scene_name = self.env._current_scenes[si_idx].scene.name
+
+                for start_frame in scene_start_frames:
+                    print(f"\nProcessing scene {scene_idx}, start frame {start_frame}")
+
+                    # Reset to this specific scene and start frame
+                    scenes_valid = self.env.reset(scene_indices=[scene_idx], start_frame_index=[start_frame])
+                    if not scenes_valid[0]:
+                        print(f"Scene {scene_idx} invalid at start frame {start_frame}, skipping...")
+                        torch.cuda.empty_cache()
+                        continue
+
+                    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+                    # Initialize guidance and constraint configs like scene_editor.py (lines 189-235)
+                    guidance_config = None
+                    constraint_config = None
+
+                    # Get the eval_cfg to determine guidance settings
+                    eval_cfg = getattr(self.env, 'eval_cfg', None)
+                    obs_to_torch = eval_cfg.eval_class not in ["GroundTruth", "ReplayAction"]
+                    if eval_cfg is not None:
+                        # Determine guidance based on editing source
+                        heuristic_config = []
+
+                        if hasattr(eval_cfg, 'edits') and hasattr(eval_cfg.edits, 'editing_source'):
+                            if "heuristic" in eval_cfg.edits.editing_source:
+                                # Use heuristic config
+                                if eval_cfg.edits.heuristic_config is not None:
+                                    heuristic_config = eval_cfg.edits.heuristic_config
+
+                            # Getting edits from either config file or heuristics
+                            if "config" in eval_cfg.edits.editing_source:
+                                guidance_config = eval_cfg.edits.guidance_config
+                                constraint_config = eval_cfg.edits.constraint_config
+
+                            if "heuristic" in eval_cfg.edits.editing_source and heuristic_config is not None:
+                                # Get observation for heuristic guidance computation
+                                ex_obs = self.env.get_observation()
+
+                                if obs_to_torch:
+                                    ex_obs = TensorUtils.to_torch(ex_obs, device=device, ignore_if_unspecified=True)
+
+                                # Compute heuristic guidance
+                                heuristic_guidance_cfg = compute_heuristic_guidance(
+                                    heuristic_config,
+                                    self.env,
+                                    [scene_idx],  # Single scene
+                                    [start_frame],  # Single start frame
+                                    example_batch=ex_obs['agents']
+                                )
+                                # Keep only scenes with at least one guidance
+                                valid_scene_inds = [i for i, sc in enumerate(heuristic_guidance_cfg) if len(sc) > 0]
+                                heuristic_guidance_cfg = [heuristic_guidance_cfg[i] for i in
+                                                            valid_scene_inds] if len(valid_scene_inds) > 0 else [[]]
+                                guidance_config = merge_guidance_configs(guidance_config, heuristic_guidance_cfg)
+
+                    print(
+                        f"      Rollouts: guidance_config type: {type(guidance_config)}, length: {len(guidance_config) if guidance_config else 'None'}")
+                    print(
+                        f"      Rollouts: constraint_config type: {type(constraint_config)}, length: {len(constraint_config) if constraint_config else 'None'}")
+
+                    rollout_policy = RolloutWrapper(agents_policy=self.policy)
+                    eval_cfg = getattr(self.env, 'eval_cfg', None)
+
+                    # Call guided_rollout
+                    stats, info, renderings = guided_rollout(
+                        env=self.env,
+                        policy=rollout_policy,
+                        policy_model=self.policy_model,
+                        n_step_action=eval_cfg.n_step_action,
+                        guidance_config=guidance_config,  # Pass computed guidance
+                        constraint_config=constraint_config,  # Pass computed constraints
+                        render=False,
+                        scene_indices=[scene_idx],
+                        device=device,
+                        obs_to_torch=obs_to_torch,
+                        horizon=self.config.horizon,
+                        start_frames=[start_frame],
+                        eval_class='Diffuser',  # You may want to get this from eval_cfg.eval_class
+                        apply_guidance=eval_cfg.apply_guidance
+                    )
+
+
+                    # Extract buffer with proper error handling
+                    buffer = None
+                    if isinstance(info, dict) and 'buffer' in info:
+                        if info['buffer'] is not None and len(info['buffer']) > 0:
+                            buffer = info['buffer'][0]  # First scene's buffer
+                            print(f"      Successfully extracted buffer")
+                        else:
+                            print(f"      RolloutBuffer is empty or None")
+                    else:
+                        print(f"      No buffer key in info")
+
+                    guide_agg_dict = {}
+                    pop_list = []
+                    for k, v in stats.items():
+                        if k.split('_')[0] == 'guide':
+                            guide_name = '_'.join(k.split('_')[:-1])
+                            guide_scene_tag = k.split('_')[-1][:2]
+                            canon_name = guide_name + '_%sg0' % (guide_scene_tag)
+                            if canon_name not in guide_agg_dict:
+                                guide_agg_dict[canon_name] = []
+                            guide_agg_dict[canon_name].append(v)
+                            # remove from stats
+                            pop_list.append(k)
+                    for k in pop_list:
+                        stats.pop(k, None)
+                    # average over all of the same guide stats in each scene
+                    for k, v in guide_agg_dict.items():
+                        scene_stats = np.stack(v, axis=0)  # guide_per_scenes x num_scenes (all are nan except 1)
+                        stats[k] = np.mean(scene_stats, axis=0)
+
+                    # aggregate metrics stats
+                    if result_stats is None:
+                        result_stats = stats
+                        result_stats["scene_index"] = np.array(info["scene_index"])
+                    else:
+                        for k in stats:
+                            if k not in result_stats:
+                                result_stats[k] = stats[k]
+                            else:
+                                result_stats[k] = np.concatenate([result_stats[k], stats[k]], axis=0)
+                        result_stats["scene_index"] = np.concatenate(
+                            [result_stats["scene_index"], np.array(info["scene_index"])])
+
+                    # write stats to disk
+                    with open(os.path.join(eval_cfg.results_dir, "stats.json"), "w+") as fp:
+                        stats_to_write = TensorUtils.map_ndarray(result_stats, lambda x: x.tolist())
+                        json.dump(stats_to_write, fp)
+
+                    if "buffer" in info:
+                        dump_episode_buffer(
+                            info["buffer"],
+                            info["scene_index"],
+                            [start_frame],
+                            h5_path=self.hdf5_dir
+                        )
+
+    def inference_adversarial(self):
+        """
+        Main adversarial inference loop
+        Using learned reward to guide the generation of Diffusion models
+        """
+
+        # load learned reward
+        self.current_theta = self.load_reward_from_pkl()
+
+        # apply learned reward as guidance
+        self.update_diffusion_model_with_reward()
+
+        # run inference
+        self.run_and_save_results()
+
+
+
+
 if __name__ == "__main__":
-    # Initialize adversarial trainer
-    trainer = AdversarialIRLDiffusion(default_config)
-    
-    # Setup environment
-    trainer.setup_environment()
-    
-    # Run adversarial training
-    final_theta, history = trainer.train_adversarial(num_iterations=default_config.num_iterations)
-    
-    print(f"Final learned reward weights: {final_theta}")
-    
-    # Save final results
-    with open("adversarial_irl_results.pkl", "wb") as f:
-        pickle.dump({
-            "final_theta": final_theta,
-            "training_history": history
-        }, f)
+
+    pkl_dir = "./MaxEntIRL/irl_output/adversarial_checkpoint_89.pkl"
+    output_dir = "./MaxEntIRL/irl_output/data.hdf5"
+
+    AdversarialIRLDiffusionInference(default_config, pkl_dir, output_dir).inference_adversarial()
