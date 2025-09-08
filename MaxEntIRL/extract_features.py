@@ -882,6 +882,8 @@ if __name__ == "__main__":
     cfg.ckpt.policy.ckpt_key = default_config.policy_ckpt_key
     # Set results directory to match your output directory
     cfg.results_dir = default_config.output_dir
+    # set the testing datasets
+    cfg.trajdata_source_test = default_config.trajdata_source_test
     
     try:
         # Setup environment and model

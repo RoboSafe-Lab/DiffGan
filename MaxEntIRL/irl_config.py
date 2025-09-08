@@ -42,8 +42,10 @@ class FeatureExtractionConfig:
     eval_class: str = "Diffuser"
     
     # Trajdata specific
-    trajdata_source_test: List[str] = field(default_factory=lambda: ["nusc_trainval-boston-val"])
+    location: str = "boston"
+    trajdata_source_test: List[str] = field(default_factory=list)  
     trajdata_data_dirs: Dict[str, str] = field(default_factory=dict)
+    
     
     # History and future settings
     history_sec: float = 3.0
@@ -58,16 +60,8 @@ class FeatureExtractionConfig:
     seed: int = 42
     
     # minimum remaining steps for rollouts
-    min_remaining_steps: int = 50
-    
-    def __post_init__(self):
-        """Initialize default values after creation"""
-        print(f"✓ Policy checkpoint dir: {self.policy_ckpt_dir}")
-        print(f"✓ Policy checkpoint key: {self.policy_ckpt_key}")
-        
-           
-        # Ensure output directory exists
-        os.makedirs(self.output_dir, exist_ok=True)
+    min_remaining_steps: int = 50    
+
 
     ############### Parameters for adversarial training
 
@@ -81,9 +75,23 @@ class FeatureExtractionConfig:
     # Wandb configuration
     use_wandb: bool = True
     wandb_project: str = "adversarial-irl-diffusion"
-    wandb_entity: str = "chengwang150"  # Your wandb username/team
+    wandb_entity: str = "chengwang2015"  # Your wandb username/team
     wandb_run_name: str = None  # Will be auto-generated if None
     wandb_tags: List[str] = field(default_factory=lambda: ["adversarial", "irl", "diffusion"])
 
+    
+    def __post_init__(self):
+        """Initialize default values after creation"""
+        # Create test_dataset and trajdata_source_test based on location
+        self.test_dataset = f"nusc_trainval-{self.location}-val"
+        self.trajdata_source_test = [self.test_dataset]
+        
+        print(f"✓ Policy checkpoint dir: {self.policy_ckpt_dir}")
+        print(f"✓ Policy checkpoint key: {self.policy_ckpt_key}")
+        
+            
+        # Ensure output directory exists
+        os.makedirs(self.output_dir, exist_ok=True)
+    
 # Default configuration instance
 default_config = FeatureExtractionConfig()
