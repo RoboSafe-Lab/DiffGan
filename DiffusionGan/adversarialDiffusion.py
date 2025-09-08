@@ -83,7 +83,7 @@ class AdversarialIRLDiffusion:
         self.policy_model = self.extractor.policy_model
         print("Environment and models setup complete")
     
-    def train_adversarial(self, num_iterations=10):
+    def train_adversarial(self, num_iterations=100):
         """
         Main adversarial training loop
         Generator (Diffusion): Tries to generate realistic trajectories
@@ -352,17 +352,22 @@ class AdversarialIRLDiffusion:
     
     def save_checkpoint(self, iteration):
         """Save training checkpoint"""
-        checkpoint = {
-            'iteration': iteration,
-            'theta': self.current_theta,
-            'training_history': self.training_history,
-        }
-        
-        checkpoint_path = os.path.join(self.config.output_dir, f"adversarial_checkpoint_{iteration}.pkl")
-        with open(checkpoint_path, 'wb') as f:
-            pickle.dump(checkpoint, f)
-        
-        print(f"Checkpoint saved to {checkpoint_path}")
+        if iteration == self.config.num_iterations - 1:
+            checkpoint = {
+                'iteration': iteration,
+                'theta': self.current_theta,
+                'training_history': self.training_history,
+            }
+            
+            # Create weights folder under output directory
+            weights_dir = os.path.join(self.config.output_dir, "weights")
+            os.makedirs(weights_dir, exist_ok=True)
+
+            checkpoint_path = os.path.join(weights_dir, f"weights_{iteration}.pkl")
+            with open(checkpoint_path, 'wb') as f:
+                pickle.dump(checkpoint, f)
+            
+            print(f"Checkpoint saved to {checkpoint_path}")
         
         
         

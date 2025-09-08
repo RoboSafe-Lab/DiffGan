@@ -42,7 +42,7 @@ class FeatureExtractionConfig:
     eval_class: str = "Diffuser"
     
     # Trajdata specific
-    trajdata_source_test: List[str] = field(default_factory=lambda: ["nusc_trainval"])
+    trajdata_source_test: List[str] = field(default_factory=lambda: ["nusc_trainval-boston-val"])
     trajdata_data_dirs: Dict[str, str] = field(default_factory=dict)
     
     # History and future settings
@@ -76,10 +76,12 @@ class FeatureExtractionConfig:
     theta_ema_beta: float = 0.9
     guidance_weight: float = 1.0
     
+    checkpoint_frequency: int = 20  # Save every N iterations
+    
     # Wandb configuration
     use_wandb: bool = True
     wandb_project: str = "adversarial-irl-diffusion"
-    wandb_entity: str = None  # Your wandb username/team
+    wandb_entity: str = "chengwang150"  # Your wandb username/team
     wandb_run_name: str = None  # Will be auto-generated if None
     wandb_tags: List[str] = field(default_factory=lambda: ["adversarial", "irl", "diffusion"])
 
