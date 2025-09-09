@@ -92,12 +92,13 @@ class IRLFeatureExtractor:
         Extract IRL features by generating rollouts from ALL frames, not just start frame
         """
         print("Extracting IRL features from ALL frames...")
-        
+            
         all_features = {}
         scene_i = 0
-        eval_scenes = self.config.eval_scenes
+        eval_scenes = self.filtering_scenes()
+        self.config.eval_scenes = eval_scenes
 
-        while scene_i < self.config.num_scenes_to_evaluate:
+        while scene_i < len(eval_scenes):
             scene_indices = eval_scenes[scene_i: scene_i + self.config.num_scenes_per_batch]
             scene_i += self.config.num_scenes_per_batch
             print(f'Processing scene_indices: {scene_indices}')
@@ -109,13 +110,8 @@ class IRLFeatureExtractor:
             
             # Reset environment to get scene information
             scenes_valid = self.env.reset(scene_indices=scene_indices, start_frame_index=None)
-            scene_indices = [si for si, sval in zip(scene_indices, scenes_valid) if sval]
-            
-            if len(scene_indices) == 0:
-                print('No valid scenes in this batch, skipping...')
-                torch.cuda.empty_cache()
-                continue
-        
+            scene_indices = [si for si, sval in zip(scene_indices, scenes_valid) if sval]            
+      
             # Determine start frames for each scene
             start_frame_index: list[list[int]] = []
             valid_scene_indices = []
@@ -126,8 +122,6 @@ class IRLFeatureExtractor:
 
             # Multiple sims per scene: spread starts across valid range
             for si_idx, scene_idx in enumerate(scene_indices):
-                print(f"Processing scene {scene_idx} (index {si_idx})")
-                
                 current_scene = self.env._current_scenes[si_idx].scene
                 sframe = history_frames + 1
                 # Ensure there's enough horizon for rollout
@@ -206,6 +200,42 @@ class IRLFeatureExtractor:
             torch.cuda.empty_cache()
         return all_features
 
+
+    def filtering_scenes(self):
+        """
+        Filter scenes based on location and number of scenes to evaluate
+        """ 
+        valid_scene_indices = []
+               
+        scenes_data = self.env.dataset.scenes()
+        all_scene_indices = list(range(len(scenes_data)))
+        print(f"✅ Found {len(all_scene_indices)} total scenes in dataset")
+            
+        max_scenes = self.config.num_scenes_to_evaluate
+        for scene_idx in all_scene_indices:
+            # Check if we've reached the max_scenes limit (only if max_scenes > 0)
+            if max_scenes > 0 and len(valid_scene_indices) >= max_scenes:
+                break
+                
+            # Check scene location before adding to valid list
+            scenes_valid = self.env.reset(scene_indices=[scene_idx], start_frame_index=None)
+            if scenes_valid[0]:
+                scene_location = self.env._current_scenes[0].scene.location
+                if self.config.scene_location in scene_location:
+                    valid_scene_indices.append(scene_idx)
+                    print(f"  ✅ Scene {scene_idx}: {scene_location} - Added ({len(valid_scene_indices)}/{max_scenes if max_scenes > 0 else '∞'})")
+                else:
+                    print(f"  ❌ Scene {scene_idx}: {scene_location} - Skipped (wrong location)")
+            else:
+                print(f"  ❌ Scene {scene_idx}: Invalid scene - Skipped")
+        
+        if max_scenes > 0:
+            print(f"✅ Filtered to {len(valid_scene_indices)} scenes matching location '{self.config.scene_location}' with max_scenes={max_scenes}")         
+        else:
+            print(f"✅ Filtered to {len(valid_scene_indices)} scenes matching location '{self.config.scene_location}' without max_scenes limit")
+        
+
+        return valid_scene_indices
 
     def _generate_rollouts_from_specific_frame(self, scene_idx, start_frame):
         """
@@ -767,7 +797,7 @@ class IRLFeatureExtractor:
             avg_front = np.mean(front_exp_thw_all[i])
             avg_left = np.mean(left_exp_thw_all[i])
             avg_right = np.mean(right_exp_thw_all[i])
-            print(f"    Agent {dyn_aid}: Avg THW - Front: {avg_front:.1f}s, Left: {avg_left:.1f}s, Right: {avg_right:.1f}s")
+            # print(f"    Agent {dyn_aid}: Avg THW - Front: {avg_front:.1f}s, Left: {avg_left:.1f}s, Right: {avg_right:.1f}s")
 
         
         # Step 9: Assemble features for each dynamic agent
@@ -882,8 +912,6 @@ if __name__ == "__main__":
     cfg.ckpt.policy.ckpt_key = default_config.policy_ckpt_key
     # Set results directory to match your output directory
     cfg.results_dir = default_config.output_dir
-    # set the testing datasets
-    cfg.trajdata_source_test = default_config.trajdata_source_test
     
     try:
         # Setup environment and model

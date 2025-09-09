@@ -20,10 +20,10 @@ class FeatureExtractionConfig:
         ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'front_thw', 'left_thw', 'right_thw'])
     
     # Scene selection
-    # scene_indices: List[int] = field(default_factory=lambda: [0]) # Default to first scene
-   
-    num_scenes_to_evaluate: int = 100
-    eval_scenes: List[int] = field(default_factory=lambda: np.arange(0, 100, 10).tolist())
+    scene_location: str = "singapore" # Options: 'boston', 'singapore'
+    num_scenes_to_evaluate: int = 10
+    
+    eval_scenes: List[int] = field(default_factory=list)
     num_scenes_per_batch: int = 1
     num_sim_per_scene: int = 1
 
@@ -39,13 +39,7 @@ class FeatureExtractionConfig:
 
     # Environment settings
     env: str = "trajdata"
-    eval_class: str = "Diffuser"
-    
-    # Trajdata specific
-    location: str = "boston"
-    trajdata_source_test: List[str] = field(default_factory=list)  
-    trajdata_data_dirs: Dict[str, str] = field(default_factory=dict)
-    
+    eval_class: str = "Diffuser"  
     
     # History and future settings
     history_sec: float = 3.0
@@ -81,11 +75,7 @@ class FeatureExtractionConfig:
 
     
     def __post_init__(self):
-        """Initialize default values after creation"""
-        # Create test_dataset and trajdata_source_test based on location
-        self.test_dataset = f"nusc_trainval-{self.location}-val"
-        self.trajdata_source_test = [self.test_dataset]
-        
+        """Initialize default values after creation"""        
         print(f"✓ Policy checkpoint dir: {self.policy_ckpt_dir}")
         print(f"✓ Policy checkpoint key: {self.policy_ckpt_key}")
         
