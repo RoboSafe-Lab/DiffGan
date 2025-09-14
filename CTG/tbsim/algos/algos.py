@@ -2927,10 +2927,10 @@ class FlowMatchingTrafficModel(pl.LightningModule):
             flow_model_arch=algo_config.flow_model_arch,
             horizon=algo_config.horizon,
             
-            observation_dim = 4 # x, y, vel, yaw
-            action_dim = 2 # acc, yawvel
-            output_dim = 2 # acc, yawvel
-            
+            observation_dim = 4, # x, y, vel, yaw
+            action_dim = 2, # acc, yawvel
+            output_dim = 2, # acc, yawvel
+
             flow_matching_sigma=algo_config.flow_matching_sigma,
             flow_matching_t_max=algo_config.flow_matching_t_max,
             loss_type=algo_config.loss_type,
