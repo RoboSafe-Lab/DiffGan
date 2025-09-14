@@ -363,7 +363,7 @@ class AdversarialIRLDiffusion:
             weights_dir = os.path.join(self.config.output_dir, "weights")
             os.makedirs(weights_dir, exist_ok=True)
 
-            checkpoint_path = os.path.join(weights_dir, f"weights_{self.config.location}.pkl")
+            checkpoint_path = os.path.join(weights_dir, f"weights_{self.config.scene_location}.pkl")
             with open(checkpoint_path, 'wb') as f:
                 pickle.dump(checkpoint, f)
             
