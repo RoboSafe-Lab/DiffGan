@@ -2882,3 +2882,156 @@ class SceneDiffuserTrafficModel(pl.LightningModule):
         if self.use_ema:
             cur_policy = self.ema_policy
         cur_policy.set_diffusion_specific_params(diffusion_specific_params)
+        
+class FlowMatchingTrafficModel(pl.LightningModule):
+    def __init__(self, algo_config, modality_shapes, registered_name, do_log=True, guidance_config=None, constraint_config=None):
+        """
+        Creates Flow Matching model for traffic simulation.
+        """
+        super(FlowMatchingTrafficModel, self).__init__()
+        self.algo_config = algo_config
+        self.nets = nn.ModuleDict()
+        self._do_log = do_log
+
+        # Data handling (similar to diffuser)
+        self.data_centric = None
+        self.coordinate = algo_config.coordinate
+        self.scene_agent_max_neighbor_dist = algo_config.scene_agent_max_neighbor_dist
+        
+        # Normalization info
+        if 'nusc' in registered_name:
+            diffuser_norm_info = algo_config.nusc_norm_info['diffuser']
+            agent_hist_norm_info = algo_config.nusc_norm_info['agent_hist']
+            neighbor_hist_norm_info = algo_config.nusc_norm_info['neighbor_hist']
+        elif 'l5' in registered_name:
+            diffuser_norm_info = algo_config.lyft_norm_info['diffuser']
+            agent_hist_norm_info = algo_config.lyft_norm_info['agent_hist']
+            neighbor_hist_norm_info = algo_config.lyft_norm_info['neighbor_hist']
+        else:
+            raise ValueError(f"Unknown dataset in registered_name: {registered_name}")
+
+        # Create flow matching model
+        self.nets["policy"] = FlowMatchingModel(
+            rasterized_map=algo_config.rasterized_map,
+            use_map_feat_global=algo_config.use_map_feat_global,
+            use_map_feat_grid=algo_config.use_map_feat_grid,
+            map_encoder_model_arch=algo_config.map_encoder_model_arch,
+            input_image_shape=modality_shapes["image"],
+            map_feature_dim=algo_config.map_feature_dim,
+            map_grid_feature_dim=algo_config.map_grid_feature_dim,
+            
+            rasterized_hist=algo_config.rasterized_history,
+            hist_num_frames=algo_config.history_num_frames+1,
+            hist_feature_dim=algo_config.history_feature_dim,
+            
+            flow_model_arch=algo_config.flow_model_arch,
+            horizon=algo_config.horizon,
+            
+            observation_dim = 4 # x, y, vel, yaw
+            action_dim = 2 # acc, yawvel
+            output_dim = 2 # acc, yawvel
+            
+            flow_matching_sigma=algo_config.flow_matching_sigma,
+            flow_matching_t_max=algo_config.flow_matching_t_max,
+            loss_type=algo_config.loss_type,
+            
+            dynamics_type=algo_config.dynamics.type,
+            dynamics_kwargs=algo_config.dynamics,
+            
+            diffuser_norm_info=diffuser_norm_info,
+            agent_hist_norm_info=agent_hist_norm_info,
+            neighbor_hist_norm_info=neighbor_hist_norm_info,
+        )
+
+    @property
+    def checkpoint_monitor_keys(self):
+        return {"valLoss": "val/losses_flow_matching_loss"}
+
+    def forward(self, obs_dict, **kwargs):
+        return self.nets["policy"](obs_dict, **kwargs)["predictions"]
+
+    def training_step(self, batch, batch_idx):
+        """Training step for flow matching"""
+        batch = batch_utils().parse_batch(batch)
+        
+        # Handle data format conversion (similar to diffuser)
+        if self.data_centric is None:
+            if "num_agents" in batch:
+                self.data_centric = 'scene'
+            else:
+                self.data_centric = 'agent'
+
+        losses = self.nets["policy"].compute_losses(batch)
+        
+        total_loss = 0.0
+        for lk, l in losses.items():
+            losses[lk] = l * self.algo_config.loss_weights[lk]
+            total_loss += losses[lk]
+            self.log("train/losses_" + lk, l)
+
+        return {
+            "loss": total_loss,
+            "all_losses": losses,
+        }
+
+    def validation_step(self, batch, batch_idx):
+        batch = batch_utils().parse_batch(batch)
+        losses = TensorUtils.detach(self.nets["policy"].compute_losses(batch))
+        
+        # Get predictions for metrics
+        pout = self.nets["policy"](batch, num_samp=self.algo_config.num_eval_samples)
+        metrics = self._compute_metrics(pout, batch)
+        
+        return {"losses": losses, "metrics": metrics}
+
+    def validation_epoch_end(self, outputs) -> None:
+        for k in outputs[0]["losses"]:
+            m = torch.stack([o["losses"][k] for o in outputs]).mean()
+            self.log("val/losses_" + k, m)
+        for k in outputs[0]["metrics"]:
+            m = np.stack([o["metrics"][k] for o in outputs]).mean()
+            self.log("val/metrics_" + k, m)
+
+    def configure_optimizers(self):
+        optim_params = self.algo_config.optim_params["policy"]
+        return torch.optim.Adam(
+            params=self.nets["policy"].parameters(),
+            lr=optim_params["learning_rate"]["initial"],
+        )
+
+    def get_action(self, obs_dict, num_action_samples=1, **kwargs):
+        """Get action for rollout"""
+        preds = self.nets["policy"](obs_dict, num_samp=num_action_samples)["predictions"]
+        
+        # Use first sample as action
+        action_preds = TensorUtils.map_tensor(preds, lambda x: x[:, 0])
+        
+        info = dict(
+            action_samples=Action(
+                positions=preds["positions"],
+                yaws=preds["yaws"]
+            ).to_dict()
+        )
+        
+        action = Action(
+            positions=action_preds["positions"],
+            yaws=action_preds["yaws"]
+        )
+        return action, info
+
+    def _compute_metrics(self, pred_batch, data_batch):
+        """Compute evaluation metrics (similar to diffuser)"""
+        metrics = {}
+        predictions = pred_batch["predictions"]
+        sample_preds = TensorUtils.to_numpy(predictions["positions"])
+        gt = TensorUtils.to_numpy(data_batch["target_positions"])
+        avail = TensorUtils.to_numpy(data_batch["target_availabilities"])
+
+        # Multi-modal metrics
+        conf = np.ones(sample_preds.shape[0:2]) / float(sample_preds.shape[1])
+        metrics["ego_avg_ADE"] = Metrics.batch_average_displacement_error(gt, sample_preds, conf, avail, "mean").mean()
+        metrics["ego_min_ADE"] = Metrics.batch_average_displacement_error(gt, sample_preds, conf, avail, "oracle").mean()
+        metrics["ego_avg_FDE"] = Metrics.batch_final_displacement_error(gt, sample_preds, conf, avail, "mean").mean()
+        metrics["ego_min_FDE"] = Metrics.batch_final_displacement_error(gt, sample_preds, conf, avail, "oracle").mean()
+
+        return metrics

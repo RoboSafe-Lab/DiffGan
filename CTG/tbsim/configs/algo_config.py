@@ -843,3 +843,129 @@ class SceneDiffuserConfig(AlgoConfig):
         #     'diffuser': [( 8.629487, 5.702340, 2.851898, 0.049617, 0.049150, 0.009598,  ), ( 31.293472, 16.655573, 22.489195, 1.454194, 494.963470, 0.558987,  )],
         #     'agent_hist': [( 4.966475, 6.206179, 2.524934, 3.378294, 1.602678,  ), ( 33.760521, 17.976578, 3.399076, 1.637678, 0.459216,  )],
         # }
+
+class FlowMatchingConfig(AlgoConfig):
+    def __init__(self):
+        super(FlowMatchingConfig, self).__init__()
+        self.eval_class = "FlowMatching"
+
+        self.name = "flow_matching"
+
+        # data coordinate
+        self.coordinate = 'agent_centric' # ['agent_centric', 'scene_centric']
+        self.scene_agent_max_neighbor_dist = 30 # used only when data_centric == 'scene' and coordinate == 'agent'
+        
+        ## model
+        self.map_encoder_model_arch = "resnet18"
+        self.flow_model_arch = "TemporalUnet"
+
+        self.disable_control_on_stationary = 'current_speed' # ['any_speed', 'current_speed'. 'on_lane', False] vehicles (always stationary) will be forced to 0 during rollout (including denoising iteration)
+        self.moving_speed_th = 5e-1 # speed threshold for determining if stationary
+
+        # whether ego/neighbor histories are rasterized and given to
+        #   the model or they need to be processed by an MLP
+        self.rasterized_history = True
+        # whether the map will be passed in as conditioning
+        #       i.e. do we need a map encoder
+        #    this corresponds only to the TRUE map
+        self.rasterized_map = True
+        # whether to use a "global" map feature (passed in as conditioning to flow matching)
+        #   and/or a feature grid (sampled at each trajectory position and concated to trajectory input to flow matching)
+        self.use_map_feat_global = True
+        self.use_map_feat_grid = False
+
+        self.horizon = 52 # param to control the number of time steps to use for future prediction
+        self.action_weight = 1
+        self.loss_discount = 1 # apply same loss over whole trajectory, don't lessen loss further in future
+
+        # Flow matching specific parameters
+        self.flow_matching_sigma = 0.1
+        self.flow_matching_t_max = 1.0
+        self.num_sampling_steps = 50
+
+        self.clip_predictions = False
+        self.loss_type = 'l2'
+
+        # Exponential moving average
+        self.use_ema = True
+        self.ema_step = 1
+        self.ema_decay = 0.995
+        self.ema_start_step = 4000
+
+        self.action_loss_only = False
+
+        # ['state', 'action', 'state_and_action', 'state_and_action_no_dyn']
+        self.flow_input_mode = 'state_and_action'
+        # only used when flow_input_mode in ['state_and_action', 'state_and_action_no_dyn']
+        self.use_reconstructed_state = False
+
+        # likelihood of not using conditioning as input, even if available
+        #       if 1.0, doesn't include cond encoder in arch
+        #       if 0.0, conditioning is always used as usual
+        self.conditioning_drop_map_p = 0.0
+        self.conditioning_drop_neighbor_p = 0.0
+
+        # value to fill in when condition is "dropped". Should not just be 0 -- the model
+        #   should "know" data is missing, not just think there are e.g. no obstacles in the map.
+        self.conditioning_drop_fill = 0.5
+
+        # the final conditioning feature size after all cond inputs
+        #       have been processed together (e.g. map feat, hist feat, state feat...)
+        self.cond_feat_dim = 256
+        self.curr_state_feat_dim = 64 # only used with rasterized history
+        self.map_feature_dim = 256
+        self.map_grid_feature_dim = 32
+        self.history_feature_dim = 128 # if separate from map
+        
+        self.history_num_frames = 30 # param to control the number of time steps to use for history
+        self.history_num_frames_ego = self.history_num_frames
+        self.history_num_frames_agents = self.history_num_frames
+
+        self.future_num_frames = self.horizon
+        self.step_time = 0.1
+        self.render_ego_history = False
+
+        self.decoder.layer_dims = ()
+        self.decoder.state_as_input = True
+
+        self.dynamics.type = "Unicycle"
+        self.dynamics.max_steer = 0.5
+        self.dynamics.max_yawvel = math.pi * 2.0
+        self.dynamics.acce_bound = (-10, 8)
+        self.dynamics.ddh_bound = (-math.pi * 2.0, math.pi * 2.0)
+        self.dynamics.max_speed = 40.0  # roughly 90mph
+
+        self.loss_weights.flow_matching_loss = 1.0
+
+        self.optim_params.policy.learning_rate.initial = 2e-4  # policy learning rate
+
+        self.optim_params.policy.learning_rate.decay_factor = (
+            0.1  # factor to decay LR by (if epoch schedule non-empty)
+        )
+        self.optim_params.policy.learning_rate.epoch_schedule = (
+            []
+        )  # epochs where LR decay occurs
+
+        # how many samples to take for validation (during training)
+        self.flow_matching.num_eval_samples = 10
+
+        # nusc_train_val, hist=30, fut=52 (same normalization as diffuser for consistency)
+        self.nusc_norm_info = {
+            'diffuser': [( 2.135494, 0.003704, 0.970226, 0.000573, -0.002965, 0.000309,  ), ( 5.544400, 0.524067, 2.206522, 0.049049, 0.729327, 0.023765,  )],
+            'agent_hist': [( -1.198923, 0.000128, 0.953161, 4.698113, 2.051664,  ), ( 3.180241, 0.159182, 2.129779, 2.116855, 0.388149,  )],
+            'neighbor_hist': [( -0.237441, 1.118636, 0.489575, 0.868664, 0.222984,  ), ( 7.587311, 7.444489, 1.680952, 2.578202, 0.832563,  )],
+        }
+
+        # lyft level5, hist=30, fut=52
+        self.lyft_norm_info = {
+            'diffuser': [( 2.135494, 0.003704, 0.970226, 0.000573, -0.002965, 0.000309,  ), ( 5.544400, 0.524067, 2.206522, 0.049049, 0.729327, 0.023765,  )],
+            'agent_hist': [( -1.198923, 0.000128, 0.953161, 4.698113, 2.051664,  ), ( 3.180241, 0.159182, 2.129779, 2.116855, 0.388149,  )],
+            'neighbor_hist': [( -0.237441, 1.118636, 0.489575, 0.868664, 0.222984,  ), ( 7.587311, 7.444489, 1.680952, 2.578202, 0.832563,  )],
+        }
+
+        # nuplan, hist=30, fut=52, vehicle
+        self.nuplan_norm_info = {
+            'diffuser': [( 4.796822, 0.005868, 2.192235, 0.001452, 0.031407, 0.000549,  ), ( 9.048500, 0.502242, 3.416214, 0.081688, 5.372146, 0.074966,  )],
+            'agent_hist': [( -2.740177, 0.002556, 2.155241, 3.783593, 1.812939,  ), ( 5.212748, 0.139311, 3.422815, 1.406989, 0.298052,  )],
+            'neighbor_hist': [( -0.405011, 1.321956, 0.663815, 0.581748, 0.162458,  ), ( 8.044137, 6.039638, 2.541506, 1.919543, 0.685904,  )],
+        }

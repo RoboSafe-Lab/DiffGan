@@ -17,6 +17,7 @@ from tbsim.algos.algos import (
     SceneTreeTrafficModel,
     STRIVETrafficModel,
     SceneDiffuserTrafficModel,
+    FlowMatchingTrafficModel,
 )
 
 from tbsim.algos.multiagent_algos import (
@@ -75,6 +76,8 @@ def algo_factory(config: ExperimentConfig, modality_shapes: dict):
         algo = STRIVETrafficModel(algo_config=algo_config, modality_shapes=modality_shapes)
     elif algo_name == "scene_diffuser":
         algo = SceneDiffuserTrafficModel(algo_config=algo_config, modality_shapes=modality_shapes, registered_name=config.registered_name)
+    elif config.algo.name == "flow_matching":
+        algo = FlowMatchingTrafficModel(algo_config=algo_config,  modality_shapes=modality_shapes, registered_name=config.registered_name)
     else:
         raise NotImplementedError("{} is not a valid algorithm" % algo_name)
     return algo

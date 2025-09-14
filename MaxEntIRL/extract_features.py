@@ -206,8 +206,8 @@ class IRLFeatureExtractor:
         Filter scenes based on location and number of scenes to evaluate
         """ 
         valid_scene_indices = []
-               
-        scenes_data = self.env.dataset.scenes()
+     
+        scenes_data = list(self.env.dataset.scenes())
         all_scene_indices = list(range(len(scenes_data)))
         print(f"✅ Found {len(all_scene_indices)} total scenes in dataset")
             

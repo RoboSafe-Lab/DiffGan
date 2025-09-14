@@ -84,6 +84,7 @@ from tbsim.configs.algo_config import (
     DiffuserConfig,
     STRIVEConfig,
     SceneDiffuserConfig,
+    FlowMatchingConfig,
 )
 
 
@@ -333,6 +334,13 @@ EXP_CONFIG_REGISTRY["trajdata_nusc_strive"] = ExperimentConfig(
     env_config=NuscTrajdataEnvConfig(),
     algo_config=STRIVEConfig(),
     registered_name="trajdata_nusc_strive"
+)
+
+EXP_CONFIG_REGISTRY["trajdata_nusc_flow"] = ExperimentConfig(
+    train_config=NuscTrajdataTrainConfig(),
+    env_config=NuscTrajdataEnvConfig(),
+    algo_config=FlowMatchingConfig(),
+    registered_name="trajdata_nusc_flow"
 )
 
 EXP_CONFIG_REGISTRY["trajdata_l5_bc"] = ExperimentConfig(
