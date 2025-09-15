@@ -16,7 +16,7 @@ import tbsim.utils.tensor_utils as TensorUtils
 
 class AdversarialIRLDiffusionInference:
 
-    def __init__(self, config, pkl_dir, hdf5_dir):
+    def __init__(self, config, hdf5_dir):
         self.config = config
         self.extractor: Optional[IRLFeatureExtractor] = None
         self.env = None
@@ -27,8 +27,10 @@ class AdversarialIRLDiffusionInference:
         self.theta_ema = None  # EMA of theta for stability
         self.irl_norm_mean = None
         self.irl_norm_std = None
-        self.pkl_dir = pkl_dir
-        self.hdf5_dir = hdf5_dir
+        self.pkl_dir = f"./MaxEntIRL/irl_output/weights/{config.scene_location}_99.pkl"
+        self.location_output_dir = os.path.join(hdf5_dir, config.scene_location)
+        os.makedirs(self.location_output_dir, exist_ok=True)
+        self.hdf5_path = os.path.join(self.location_output_dir, "data.hdf5")
 
         self.setup_environment()
 
@@ -54,7 +56,7 @@ class AdversarialIRLDiffusionInference:
         # Checkpoint paths and output dir
         cfg.ckpt.policy.ckpt_dir = self.config.policy_ckpt_dir
         cfg.ckpt.policy.ckpt_key = self.config.policy_ckpt_key
-        cfg.results_dir = self.config.output_dir
+        cfg.results_dir = self.location_output_dir
 
         # Create extractor (holds env/policy/model)
         self.extractor = IRLFeatureExtractor(cfg, self.config)
@@ -131,11 +133,39 @@ class AdversarialIRLDiffusionInference:
             return data['theta']
 
 
-    def run_and_save_results(self):
+    def run_and_save_results(self, render_to_video=True, render_to_img=False, render_cfg=None):
         scene_i = 0
-        eval_scenes = self.config.eval_scenes
+        eval_scenes = self.extractor.filtering_scenes()
         result_stats = None
-        while scene_i < self.config.num_scenes_to_evaluate:
+        
+        # Set default render config if not provided
+        if render_cfg is None:
+            render_cfg = {
+                'size': 400,
+                'px_per_m': 2.0,
+                'save_every_n_frames': 5,
+                'draw_mode': 'action',
+            }
+    
+        # Create visualization directory
+        if render_to_video or render_to_img:
+            viz_dir = os.path.join(self.location_output_dir, "viz/")
+            os.makedirs(viz_dir, exist_ok=True)
+            
+            # Initialize render rasterizer
+            from tbsim.utils.scene_edit_utils import get_trajdata_renderer
+            render_rasterizer = get_trajdata_renderer(
+                self.env.eval_cfg.trajdata_source_test,
+                self.env.eval_cfg.trajdata_data_dirs,
+                future_sec=self.env.eval_cfg.future_sec,
+                history_sec=self.env.eval_cfg.history_sec,
+                raster_size=render_cfg['size'],
+                px_per_m=render_cfg['px_per_m'],
+                rebuild_maps=False,
+                cache_location='~/.unified_data_cache'
+            )
+        
+        while scene_i < len(eval_scenes):
             scene_indices = eval_scenes[scene_i: scene_i + self.config.num_scenes_per_batch]
             scene_i += self.config.num_scenes_per_batch
             print(f'Processing scene_indices: {scene_indices}')
@@ -328,19 +358,62 @@ class AdversarialIRLDiffusionInference:
                             [result_stats["scene_index"], np.array(info["scene_index"])])
 
                     # write stats to disk
-                    with open(os.path.join(eval_cfg.results_dir, "stats.json"), "w+") as fp:
+                    with open(os.path.join(self.location_output_dir, "stats.json"), "w+") as fp:
                         stats_to_write = TensorUtils.map_ndarray(result_stats, lambda x: x.tolist())
                         json.dump(stats_to_write, fp)
 
+                    
+                    # Render visualization for this scene
+                    if (render_to_video or render_to_img) and "buffer" in info:
+                        from tbsim.utils.scene_edit_utils import visualize_guided_rollout
+                        
+                        # Create scene-specific directory
+                        scene_viz_dir = os.path.join(viz_dir, f"scene-{scene_idx:04d}/")
+                        os.makedirs(scene_viz_dir, exist_ok=True)
+                        
+                        # Get the buffer for this scene
+                        scene_buffer = info["buffer"][0] if info["buffer"] else None
+                        
+                        if scene_buffer is not None:
+                            # Determine guidance and constraint configs for visualization
+                            viz_guidance_config = None
+                            viz_constraint_config = None
+                            
+                            if guidance_config is not None and len(guidance_config) > 0:
+                                viz_guidance_config = guidance_config[0] if isinstance(guidance_config[0], list) else guidance_config
+                            if constraint_config is not None and len(constraint_config) > 0:
+                                viz_constraint_config = constraint_config[0] if isinstance(constraint_config[0], list) else constraint_config
+                            
+                            # Visualize the rollout
+                            visualize_guided_rollout(
+                                scene_viz_dir,  # Scene-specific directory
+                                render_rasterizer,
+                                scene_name,
+                                scene_buffer,
+                                guidance_config=viz_guidance_config,
+                                constraint_config=viz_constraint_config,
+                                fps=(1.0 / self.config.step_time),
+                                n_step_action=eval_cfg.n_step_action,
+                                viz_diffusion_steps=False,
+                                first_frame_only=render_to_img,
+                                sim_num=start_frame,
+                                save_every_n_frames=render_cfg['save_every_n_frames'],
+                                draw_mode=render_cfg['draw_mode'],
+                            )
+                    
                     if "buffer" in info:
                         dump_episode_buffer(
                             info["buffer"],
                             info["scene_index"],
                             [start_frame],
-                            h5_path=self.hdf5_dir
+                            h5_path=self.hdf5_path
                         )
+                        
+            torch.cuda.empty_cache()
+        
+        return result_stats
 
-    def inference_adversarial(self):
+    def inference_adversarial(self, render_to_video=True, render_to_img=False):
         """
         Main adversarial inference loop
         Using learned reward to guide the generation of Diffusion models
@@ -352,15 +425,34 @@ class AdversarialIRLDiffusionInference:
         # apply learned reward as guidance
         self.update_diffusion_model_with_reward()
 
-        # run inference
-        self.run_and_save_results()
+        # run inference with rendering
+        render_cfg = {
+            'size': 400,
+            'px_per_m': 2.0,
+            'save_every_n_frames': 5,
+            'draw_mode': 'action',
+        }
+        
+        return self.run_and_save_results(
+            render_to_video=render_to_video,
+            render_to_img=render_to_img,
+            render_cfg=render_cfg
+        )
 
 
 
 
 if __name__ == "__main__":
+    
+    # check if output folder exists
+    output_dir = "./DiffusionGan/results"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-    pkl_dir = "./MaxEntIRL/irl_output/adversarial_checkpoint_89.pkl"
-    output_dir = "./MaxEntIRL/irl_output/data.hdf5"
 
-    AdversarialIRLDiffusionInference(default_config, pkl_dir, output_dir).inference_adversarial()
+    # Run inference with rendering
+    inferencer = AdversarialIRLDiffusionInference(default_config, output_dir)
+    inferencer.inference_adversarial(
+        render_to_video=True,  # Set to True to generate videos
+        render_to_img=False    # Set to True to generate only first frame images
+    )

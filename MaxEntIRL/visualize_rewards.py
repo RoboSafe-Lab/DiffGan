@@ -8,7 +8,7 @@ from irl_config import FeatureExtractionConfig
 
 if __name__ == "__main__":
     # load the rewards from a file and visualize them
-    reward_path = os.path.join(FeatureExtractionConfig().output_dir, "adversarial_checkpoint_89.pkl")
+    reward_path = os.path.join(FeatureExtractionConfig().output_dir, "weights", "boston_99.pkl")
     if not os.path.exists(reward_path):
         raise FileNotFoundError(f"Reward file not found at {reward_path}")
     
