@@ -80,8 +80,8 @@ class AdversarialIRLDiffusionInference:
                 'reward_weights': self.current_theta.tolist(),
                 'feature_names': feature_names,
                 'dt': self.config.step_time,
-                # 'norm_mean': self.irl_norm_mean.tolist(),
-                # 'norm_std': self.irl_norm_std.tolist(),
+                'norm_mean': self.irl_norm_mean.tolist(),
+                'norm_std': self.irl_norm_std.tolist(),
             },
             'agents': None  # Apply to all agents
         }
@@ -127,11 +127,12 @@ class AdversarialIRLDiffusionInference:
         self.apply_reward_guidance(reward_guidance)
 
 
-    def load_reward_from_pkl(self):
+    def load_pkl(self):
         with open(self.pkl_dir, 'rb') as f:
             data = pickle.load(f)
-            return data['theta']
-
+            self.current_theta = data['final_theta']
+            self.irl_norm_mean = data['norm_mean']
+            self.irl_norm_std  = data['norm_std']
 
     def run_and_save_results(self, render_to_video=True, render_to_img=False, render_cfg=None):
         scene_i = 0
@@ -419,8 +420,8 @@ class AdversarialIRLDiffusionInference:
         Using learned reward to guide the generation of Diffusion models
         """
 
-        # load learned reward
-        self.current_theta = self.load_reward_from_pkl()
+        # load learned reward and mean, std of features
+        self.load_pkl()
 
         # apply learned reward as guidance
         self.update_diffusion_model_with_reward()
@@ -438,8 +439,6 @@ class AdversarialIRLDiffusionInference:
             render_to_img=render_to_img,
             render_cfg=render_cfg
         )
-
-
 
 
 if __name__ == "__main__":
