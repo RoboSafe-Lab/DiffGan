@@ -113,7 +113,7 @@ class AdversarialIRLDiffusion:
             # Step 4: Evaluate and log progress
             self.evaluate_iteration(generated_features, iteration)
 
-        return self.current_theta, self.training_history
+        return self.current_theta, self.irl_norm_mean, self.irl_norm_std
     
     def generate_trajectories_with_current_model(self):
         """Generate trajectories using current diffusion model state"""
@@ -379,7 +379,7 @@ if __name__ == "__main__":
     trainer.setup_environment()
     
     # Run adversarial training
-    final_theta, history = trainer.train_adversarial(num_iterations=default_config.num_iterations)
+    final_theta, norm_mean, norm_std = trainer.train_adversarial(num_iterations=default_config.num_iterations)
     
     print(f"Final learned reward weights: {final_theta}")
     
@@ -387,5 +387,6 @@ if __name__ == "__main__":
     with open("adversarial_irl_results.pkl", "wb") as f:
         pickle.dump({
             "final_theta": final_theta,
-            "training_history": history
+            "norm_mean": norm_mean, 
+            "norm_std": norm_std
         }, f)
