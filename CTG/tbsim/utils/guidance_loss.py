@@ -2160,6 +2160,107 @@ class LearnedRewardGuidance(GuidanceLoss):
             return tensor[..., 1:] - tensor[..., :-1]
 
         feats_out = []
+
+        # --- Common THW calculation for all THW features ---
+        calculate_thw = any(f in feature_names for f in ["front_thw", "left_thw", "right_thw"])
+        
+        if calculate_thw and T > 0:
+            # Initialize raw THW arrays (B, N, T)
+            # These will store the actual time headway values before exponential decay
+            front_thw_raw_all = torch.full((B, N, T), float('inf'), device=device)
+            left_thw_raw_all = torch.full((B, N, T), float('inf'), device=device)
+            right_thw_raw_all = torch.full((B, N, T), float('inf'), device=device)
+
+            # Iterate over each sample in the batch (B)
+            for b_idx in range(B):
+                # Extract relevant data for the current batch sample
+                pos_b = pos_w[b_idx]  # (N, T, 2)
+                vel_b = vel[b_idx]    # (N, T)
+                yaw_b = yaw_w[b_idx]  # (N, T)
+
+                # Iterate over each agent (ego_agent) in the current batch sample (N)
+                for ego_idx in range(N):
+                    ego_pos = pos_b[ego_idx]  # (T, 2)
+                    ego_vel = vel_b[ego_idx]  # (T,)
+                    ego_yaw = yaw_b[ego_idx]  # (T,)
+
+                    # Iterate over each time step (T)
+                    for t_idx in range(T):
+                        current_ego_pos = ego_pos[t_idx]      # (2,)
+                        current_ego_speed = ego_vel[t_idx]    # scalar
+                        current_ego_heading = ego_yaw[t_idx]  # scalar
+
+                        if current_ego_speed < 0.1:  # If ego is nearly stationary, skip THW computation
+                            continue
+                        
+                        # Compute forward and side unit vectors for ego agent
+                        forward_vec = torch.tensor([torch.cos(current_ego_heading), torch.sin(current_ego_heading)], device=device) # (2,)
+                        side_vec = torch.tensor([-torch.sin(current_ego_heading), torch.cos(current_ego_heading)], device=device) # (2,) (left is positive)
+
+                        # Track minimum THW for each direction at this timestep
+                        min_front_thw_t = float('inf')
+                        min_left_thw_t = float('inf')
+                        min_right_thw_t = float('inf')
+                        
+                        # Check all other agents (other_agent) in the current batch sample
+                        for other_idx in range(N):
+                            if ego_idx == other_idx:  # Skip self
+                                continue
+
+                            other_pos = pos_b[other_idx, t_idx]  # (2,)
+
+                            # Vector from ego to other agent
+                            rel_pos = other_pos - current_ego_pos  # (2,)
+                            distance = torch.norm(rel_pos) # scalar
+
+                            if distance < 1e-6: # Avoid division by zero or very small distance issues
+                                continue
+
+                            # Project relative position onto ego's coordinate system
+                            longitudinal_dist = torch.dot(rel_pos, forward_vec)  # Forward/backward distance
+                            lateral_dist = torch.dot(rel_pos, side_vec)          # Left/right distance
+
+                            # Directional classification with geometric thresholds
+                            front_threshold = 1.0    # Agent must be at least 1m ahead
+                            side_threshold = 0.5     # Agent must be at least 0.5m to the side
+                            angle_threshold = 0.7    # ~40 degrees (cos(40°) ≈ 0.77)
+
+                            # Calculate THW for this agent
+                            thw = distance / current_ego_speed
+
+                            # Calculate angle factor for front classification
+                            forward_ratio = longitudinal_dist / distance
+                                
+                            # Front: agent is ahead and within reasonable angle
+                            if (longitudinal_dist > front_threshold and 
+                                forward_ratio > angle_threshold and 
+                                torch.abs(lateral_dist) < distance * 0.6):
+                                
+                                min_front_thw_t = min(min_front_thw_t, thw.item())
+                            
+                            # Left: agent is to the left side (lateral_dist > 0)
+                            if lateral_dist > side_threshold:
+                                min_left_thw_t = min(min_left_thw_t, thw.item())
+                            
+                            # Right: agent is to the right side (lateral_dist < 0)
+                            if lateral_dist < -side_threshold:
+                                min_right_thw_t = min(min_right_thw_t, thw.item())
+
+                        # Store minimum raw THW for each direction at this timestep
+                        if min_front_thw_t != float('inf'):
+                            front_thw_raw_all[b_idx, ego_idx, t_idx] = min_front_thw_t
+                        if min_left_thw_t != float('inf'):
+                            left_thw_raw_all[b_idx, ego_idx, t_idx] = min_left_thw_t
+                        if min_right_thw_t != float('inf'):
+                            right_thw_raw_all[b_idx, ego_idx, t_idx] = min_right_thw_t
+        else:
+            # If no THW feature is requested or T=0, initialize empty tensors
+            front_thw_raw_all = torch.zeros((B, N, T), device=device)
+            left_thw_raw_all = torch.zeros((B, N, T), device=device)
+            right_thw_raw_all = torch.zeros((B, N, T), device=device)
+
+        # --- End of common THW calculation ---
+
         for name in feature_names:
             if name == "velocity":
                 f = torch.mean(vel, dim=-1) if T > 0 else torch.zeros((B, N), device=device)
@@ -2217,9 +2318,35 @@ class LearnedRewardGuidance(GuidanceLoss):
                     feats_out.append(dmin)
                 else:
                     feats_out.append(torch.full((B, N), 50.0, device=device))
+            
+            elif name == "front_thw":
+                if T > 0:
+                    # Apply exponential decay and handle inf values
+                    front_thw_exp = torch.exp(-front_thw_raw_all)
+                    front_thw_exp[front_thw_raw_all == float('inf')] = 0.0 # replace inf with 0 after exp decay
+                    feats_out.append(torch.mean(front_thw_exp, dim=-1)) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
 
+            elif name == "left_thw":
+                if T > 0:
+                    # Apply exponential decay and handle inf values
+                    left_thw_exp = torch.exp(-left_thw_raw_all)
+                    left_thw_exp[left_thw_raw_all == float('inf')] = 0.0 # replace inf with 0 after exp decay
+                    feats_out.append(torch.mean(left_thw_exp, dim=-1)) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "right_thw":
+                if T > 0:
+                    # Apply exponential decay and handle inf values
+                    right_thw_exp = torch.exp(-right_thw_raw_all)
+                    right_thw_exp[right_thw_raw_all == float('inf')] = 0.0 # replace inf with 0 after exp decay
+                    feats_out.append(torch.mean(right_thw_exp, dim=-1)) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
             else:
-                feats_out.append(torch.zeros((B, N), device=device))
+                raise ValueError(f"Invalid feature name: {name}")
 
         return torch.stack(feats_out, dim=-1)  # (B,N,F)
 
