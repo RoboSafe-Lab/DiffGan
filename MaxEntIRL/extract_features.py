@@ -21,6 +21,7 @@ class IRLFeatureExtractor:
         self.policy = None
         self.policy_model = None
         self._setup_from_scene_editor_config(eval_cfg)
+        self._filtered_scene_cache = None  # Cache for filtered scenes
         
     def _setup_from_scene_editor_config(self, eval_cfg):
         """
@@ -95,8 +96,11 @@ class IRLFeatureExtractor:
             
         all_features = {}
         scene_i = 0
-        eval_scenes = self.filtering_scenes()
-        self.config.eval_scenes = eval_scenes
+        if self._filtered_scene_cache is not None:
+            eval_scenes = self._filtered_scene_cache
+        else:
+            eval_scenes = self.filtering_scenes()
+            self.config.eval_scenes = eval_scenes
 
         while scene_i < len(eval_scenes):
             scene_indices = eval_scenes[scene_i: scene_i + self.config.num_scenes_per_batch]
@@ -234,7 +238,9 @@ class IRLFeatureExtractor:
         else:
             print(f"✅ Filtered to {len(valid_scene_indices)} scenes matching location '{self.config.scene_location}' without max_scenes limit")
         
-
+        # Cache the result for future iterations
+        self._filtered_scene_cache = valid_scene_indices
+        
         return valid_scene_indices
 
     def _generate_rollouts_from_specific_frame(self, scene_idx, start_frame):
