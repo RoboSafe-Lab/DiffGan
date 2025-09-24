@@ -382,9 +382,13 @@ if __name__ == "__main__":
     final_theta, norm_mean, norm_std = trainer.train_adversarial(num_iterations=default_config.num_iterations)
     
     print(f"Final learned reward weights: {final_theta}")
+
+    weights_dir = os.path.join(trainer.config.output_dir, "weights")
+    os.makedirs(weights_dir, exist_ok=True)
+    checkpoint_path = os.path.join(weights_dir, "adversarial_irl_results_{trainer.config.scene_location}.pkl")
     
     # Save final results
-    with open("adversarial_irl_results.pkl", "wb") as f:
+    with open(checkpoint_path, "wb") as f:
         pickle.dump({
             "final_theta": final_theta,
             "norm_mean": norm_mean, 
