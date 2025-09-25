@@ -130,9 +130,25 @@ class AdversarialIRLDiffusionInference:
     def load_pkl(self):
         with open(self.pkl_dir, 'rb') as f:
             data = pickle.load(f)
-            self.current_theta = data['final_theta']
-            self.irl_norm_mean = data['norm_mean']
-            self.irl_norm_std  = data['norm_std']
+            thetas = []
+            means = []
+            stds = []
+            if self.config.test_feature_names is None:
+                thetas = data['final_theta']
+                means = data['norm_mean']
+                stds  = data['norm_std']
+            else:
+                feature_names = self.config.feature_names.default_factory()
+                for fname in self.config.test_feature_names.default_factory():
+                        thetas.append(data['final_theta'][feature_names.index(fname)])
+                        means.append(data['norm_mean'][feature_names.index(fname)])
+                        stds.append(data['norm_std'][feature_names.index(fname)])
+                self.config.feature_names = self.config.test_feature_names
+
+            self.current_theta = thetas
+            self.irl_norm_mean = means
+            self.irl_norm_std = stds
+
 
     def run_and_save_results(self, render_to_video=True, render_to_img=False, render_cfg=None):
         scene_i = 0
