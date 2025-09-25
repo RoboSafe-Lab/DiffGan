@@ -138,12 +138,15 @@ class AdversarialIRLDiffusionInference:
                 means = data['norm_mean']
                 stds  = data['norm_std']
             else:
-                feature_names = self.config.feature_names.default_factory()
-                for fname in self.config.test_feature_names.default_factory():
+                feature_names = self.config.feature_names
+                for fname in self.config.test_feature_names:
                         thetas.append(data['final_theta'][feature_names.index(fname)])
                         means.append(data['norm_mean'][feature_names.index(fname)])
                         stds.append(data['norm_std'][feature_names.index(fname)])
                 self.config.feature_names = self.config.test_feature_names
+                thetas = np.array(thetas)
+                means = np.array(means)
+                stds = np.array(stds)
 
             self.current_theta = thetas
             self.irl_norm_mean = means
