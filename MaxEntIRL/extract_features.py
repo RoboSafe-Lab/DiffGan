@@ -819,6 +819,13 @@ class IRLFeatureExtractor:
                 feats['jerk_long'] = jerk[i]
             if 'a_lateral' in feature_names and a_lat.shape[1] > 0:
                 feats['a_lateral'] = a_lat[i]
+
+            if 'a_long_abs' in feature_names and a_long.shape[1] > 0:
+                feats['a_long_abs'] = np.abs(a_long[i])
+            if 'jerk_long_abs' in feature_names and jerk.shape[1] > 0:
+                feats['jerk_long_abs'] = np.abs(jerk[i])
+            if 'a_lateral_abs' in feature_names and a_lat.shape[1] > 0:
+                feats['a_lateral_abs'] = np.abs(a_lat[i])
             
             # Time Headway features
             if 'front_thw' in feature_names and TT > 0:
