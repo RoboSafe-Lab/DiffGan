@@ -2239,11 +2239,26 @@ class LearnedRewardGuidance(GuidanceLoss):
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
+            elif name == "a_long_abs":
+                if T > 1:
+                    a = tdiff(vel) / dt  # (B,N,T-1)
+                    feats_out.append(torch.mean(torch.abs(a), dim=-1))
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
             elif name == "jerk_long":
                 if T > 2:
                     a = tdiff(vel) / dt              # (B,N,T-1)
                     j = tdiff(a) / dt                # (B,N,T-2)
                     feats_out.append(torch.mean(j, dim=-1))
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "jerk_long_abs":
+                if T > 2:
+                    a = tdiff(vel) / dt              # (B,N,T-1)
+                    j = tdiff(a) / dt                # (B,N,T-2)
+                    feats_out.append(torch.mean(torch.abs(j), dim=-1))
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
@@ -2253,6 +2268,15 @@ class LearnedRewardGuidance(GuidanceLoss):
                     v_mid = 0.5 * (vel[..., :-1] + vel[..., 1:])  # (B,N,T-1)
                     a_lat = yaw_rate * v_mid
                     feats_out.append(torch.mean(a_lat, dim=-1))
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "a_lateral_abs":
+                if T > 1:
+                    yaw_rate = tdiff(yaw_w) / dt     # (B,N,T-1)
+                    v_mid = 0.5 * (vel[..., :-1] + vel[..., 1:])  # (B,N,T-1)
+                    a_lat = yaw_rate * v_mid
+                    feats_out.append(torch.mean(torch.abs(a_lat), dim=-1))
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
