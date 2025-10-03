@@ -771,6 +771,11 @@ class MapCollisionLoss(GuidanceLoss):
 
     def forward(self, x, data_batch, agt_mask=None):   
         drivable_map = data_batch["drivable_map"]
+
+        # Punishment beyond the dividing line
+        #divider_map = data_batch["maps"][:, 1, :, :]
+        #drivable_map = (divider_map == 0) & drivable_map
+
         data_extent = data_batch["extent"]
         data_raster_from_agent = data_batch["raster_from_agent"]
 
