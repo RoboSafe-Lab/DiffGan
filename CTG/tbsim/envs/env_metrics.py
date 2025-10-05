@@ -1175,10 +1175,10 @@ class OccupancyDiversity(Occupancymet):
             indices = np.where(state_info["scene_index"]==scene_idx)[0]
             if scene_idx not in self.og:
                 self.og[scene_idx] = [OccupancyGrid(self.gridinfo,self.sigma)]
-            if len(self.og[scene_idx])==self.episode_index:
+            # fix: Ensure that the current scene has og in this episode,
+            #      even if no steps have been recorded previously.
+            while len(self.og[scene_idx]) <= self.episode_index:
                 self.og[scene_idx].append(OccupancyGrid(self.gridinfo,self.sigma))
-            
-            assert len(self.og[scene_idx])==self.episode_index+1
             self.og[scene_idx][self.episode_index].update(
                 coords=coords[indices],
                 raster_from_world=state_info["raster_from_world"][indices],

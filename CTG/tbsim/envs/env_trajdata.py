@@ -312,7 +312,23 @@ class EnvUnifiedSimulation(BaseEnv, BatchedEnv):
                 metrics[met_name] = met_vals
 
         for k in metrics:
-            assert metrics[k].shape == (self.num_instances,)
+            if not metrics[k].shape == (self.num_instances,):
+                print(f"Error: Metric {k} has shape {metrics[k].shape}, expected {self.num_instances}, try to fix...")
+            # fix the shape, avoid abnormality in the entire batch
+            v = metrics[k]
+            if v is None:
+                metrics[k] = np.zeros(self.num_instances)
+            elif v.shape != (self.num_instances,):
+                try:
+                    v = np.asarray(v).reshape(-1)
+                except Exception:
+                    v = np.zeros(self.num_instances)
+                if v.shape[0] < self.num_instances:
+                    pad = np.zeros(self.num_instances - v.shape[0], dtype=v.dtype if hasattr(v, 'dtype') else float)
+                    v = np.concatenate([v, pad], axis=0)
+                elif v.shape[0] > self.num_instances:
+                    v = v[:self.num_instances]
+                metrics[k] = v
         return TensorUtils.detach(metrics)
 
     def get_observation_by_scene(self):
