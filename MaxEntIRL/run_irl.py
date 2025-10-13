@@ -87,6 +87,13 @@ class MaxEntIRL:
                     for rfeat in lst:
                         vecs.append(self.convert_features_to_array(rfeat, apply_norm=False))
 
+        # Handle empty vecs case
+        if len(vecs) == 0:
+            print("Warning: No feature vectors found for normalization. Using default normalization (mean=0, std=1)")
+            mean = np.zeros(self.feature_num, dtype=float)
+            std = np.ones(self.feature_num, dtype=float)
+            return mean, std
+
         mat = np.stack(vecs, axis=0)
         mean = mat.mean(axis=0)
         std = mat.std(axis=0)
