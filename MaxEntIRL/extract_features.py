@@ -428,13 +428,17 @@ class IRLFeatureExtractor:
                 # Get centroid data
                 centroids = np.asarray(buffer['centroid'])
                 yaws = np.asarray(buffer['yaw'])
+                maps = np.asarray(buffer['maps'])
+                rasters = np.asarray(buffer['raster_from_world'])
                     
                 # Create dictionary with agent_id as key for a rollout
                 for i, unique_agent_id in enumerate(unique_agent_ids):
                     if unique_agent_id not in agents_per_rollout:
                         agents_per_rollout[unique_agent_id] = {
                             'positions': centroids[i],
-                            'yaw': yaws[i]
+                            'yaw': yaws[i],
+                            'map': maps[i],
+                            'raster': rasters[i],
                         }
 
                 if agents_per_rollout:
@@ -470,6 +474,8 @@ class IRLFeatureExtractor:
                 agent_accelerations = []
                 agent_headings = []
                 agent_speeds = []
+                agent_maps = []
+                agent_rasters = []
 
                 for frame_offset in range(self.config.horizon):
                     frame_idx = start_frame + frame_offset
@@ -481,7 +487,7 @@ class IRLFeatureExtractor:
                         
                     # Use the dataset's method to get agent states
                     states = current_scene.cache.get_states([agent_name], frame_idx)
-                    
+
                     # Process valid states
                     if states is not None and hasattr(states, '__len__') and len(states) > 0:
                         state = states[0]
@@ -503,6 +509,9 @@ class IRLFeatureExtractor:
                         # Compute derived quantities
                         speed = np.sqrt(vx**2 + vy**2)
                         heading = np.arctan2(sin_h, cos_h)  # Convert from sin/cos to angle
+
+                        # Get map
+                        map, raster, _ = current_scene.cache.load_map_patch(x, y, 400, 2.0, (0, 0), heading, return_rgb=True)
                         
                         # Store all data
                         agent_positions.append([x, y])
@@ -510,6 +519,9 @@ class IRLFeatureExtractor:
                         agent_accelerations.append([ax, ay])
                         agent_speeds.append(speed)
                         agent_headings.append(heading)
+                        agent_maps.append(map)
+                        agent_rasters.append(raster)
+
                     else:
                         # No data returned, skip frame
                         continue
@@ -521,7 +533,9 @@ class IRLFeatureExtractor:
                         'velocities': np.array(agent_velocities),
                         'accelerations': np.array(agent_accelerations),
                         'speeds': np.array(agent_speeds),
-                        'yaw': np.array(agent_headings)
+                        'yaw': np.array(agent_headings),
+                        'map': np.array(agent_maps),
+                        'raster': np.array(agent_rasters)
                     }                               
                 else:
                     print(f"      Agent {agent_name} (ID {agent_idx}): insufficient data ({len(agent_positions)} positions)")
@@ -805,6 +819,28 @@ class IRLFeatureExtractor:
             avg_right = np.mean(right_exp_thw_all[i])
             # print(f"    Agent {dyn_aid}: Avg THW - Front: {avg_front:.1f}s, Left: {avg_left:.1f}s, Right: {avg_right:.1f}s")
 
+        # calculate lane distance
+        if 'lane_distance' in feature_names:
+            from lane_distance import calculate_lane_distances
+            import time
+
+            lane_distance_all = np.zeros((D, TT), dtype=np.float32)
+            st = time.time()
+
+            for i, aid in enumerate(dynamic_agent_ids):
+                data = agent_trajectories_dict[aid]
+                pos = data['positions']
+                yaw = data['yaw']
+                maps = data['map']
+                raster = data['raster']
+                distances = calculate_lane_distances(pos, yaw, maps, raster)
+                nan_sum = np.sum(np.isnan(distances))
+                if nan_sum:
+                    print(f"lane distance: {nan_sum} nan/{TT} total")
+
+                lane_distance_all[i, :] = np.nan_to_num(distances, nan=0.0)
+
+            print(f"total time of lane distance: {time.time() - st}")
         
         # Step 9: Assemble features for each dynamic agent
         agent_features = {}
@@ -841,6 +877,10 @@ class IRLFeatureExtractor:
                 feats['left_thw'] = left_exp_thw_all[i]
             if 'right_thw' in feature_names and TT > 0:
                 feats['right_thw'] = right_exp_thw_all[i]
+
+            # lane distance
+            if 'lane_distance' in feature_names:
+                feats['lane_distance'] = lane_distance_all[i]
 
             agent_features[aid] = feats
     
