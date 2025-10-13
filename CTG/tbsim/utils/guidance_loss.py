@@ -2366,7 +2366,7 @@ class LearnedRewardGuidance(GuidanceLoss):
                     feats_out.append(torch.zeros((B, N), device=device))
 
             elif name=='lane_distance':
-                from lane_distance_loss import compute_lane_distances
+                from tbsim.utils.lane_distance_loss import compute_lane_distances
                 distances = compute_lane_distances(x, data_batch)
                 feats_out.append(torch.mean(torch.nan_to_num(distances, nan=0.0)), dim=-1)
             else:

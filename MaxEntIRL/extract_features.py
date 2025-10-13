@@ -821,7 +821,7 @@ class IRLFeatureExtractor:
 
         # calculate lane distance
         if 'lane_distance' in feature_names:
-            from lane_distance import calculate_lane_distances
+            from MaxEntIRL.lane_distance import calculate_lane_distances
             import time
 
             lane_distance_all = np.zeros((D, TT), dtype=np.float32)
@@ -838,7 +838,7 @@ class IRLFeatureExtractor:
                 if nan_sum:
                     print(f"lane distance: {nan_sum} nan/{TT} total")
 
-                lane_distance_all[i, :] = np.nan_to_num(distances, nan=0.0)
+                lane_distance_all[i, :] = np.nan_to_num(distances, nan=0.0)[:TT]
 
             print(f"total time of lane distance: {time.time() - st}")
         
