@@ -37,6 +37,18 @@ class GPUAwareLaneDetector:
             data_batch: Dict[str, torch.Tensor],  # All on GPU
             use_multiprocessing: bool = True
     ) -> torch.Tensor:
+        # Detach tensors that require grad to avoid gradient computation
+        if x.requires_grad:
+            x = x.detach()
+
+        # Detach all tensors in data_batch that require grad
+        data_batch_detached = {}
+        for key, value in data_batch.items():
+            if isinstance(value, torch.Tensor) and value.requires_grad:
+                data_batch_detached[key] = value.detach()
+            else:
+                data_batch_detached[key] = value
+        data_batch = data_batch_detached
 
         device = x.device
         B, N, T, _ = x.shape
@@ -649,7 +661,7 @@ def compute_lane_distances(
 if __name__ == '__main__':
     import time
 
-    d = np.load("C:\myAppData\pythonProject\CTG-Cloud\CTG\scripts\map_layer_plots\data.npy", allow_pickle=True).item()
+    d = np.load(r"C:\myAppData\pythonProject\CTG-Cloud\CTG\scripts\map_layer_plots\data.npy", allow_pickle=True).item()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
