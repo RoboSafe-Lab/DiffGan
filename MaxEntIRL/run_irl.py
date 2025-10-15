@@ -10,7 +10,7 @@ class MaxEntIRL:
         self,
         feature_names: Optional[List[str]] = None,
         n_iters: int = 200,
-        lr: float = 0.05,
+        lr: float = 0.001,
         beta1: float = 0.9,
         beta2: float = 0.999,
         eps: float = 1e-8,
@@ -213,6 +213,13 @@ class MaxEntIRL:
             mhat = pm / (1 - self.beta1 ** (it + 1))
             vhat = pv / (1 - self.beta2 ** (it + 1))
             theta += self.lr * (mhat / (np.sqrt(vhat) + self.eps))
+
+            # Check
+            print(f"Iter {it}:")
+            print(f"  Grad norm: {np.linalg.norm(grad)}")
+            print(f"  Theta norm: {np.linalg.norm(theta)}")
+            print(f"  Feature diff norm: {np.linalg.norm(human_feature_exp - feature_exp)}")
+            print(f"  Learning rate effect: {np.linalg.norm(self.lr * mhat / (np.sqrt(vhat) + self.eps))}")
 
             # Log
             training_log["iteration"].append(it + 1)
