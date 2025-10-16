@@ -2368,7 +2368,7 @@ class LearnedRewardGuidance(GuidanceLoss):
             elif name=='lane_distance':
                 from tbsim.utils.lane_distance_loss import compute_lane_distances
                 distances = compute_lane_distances(x, data_batch)
-                feats_out.append(torch.mean(torch.nan_to_num(distances, nan=0.0)), dim=-1)
+                feats_out.append(torch.mean(torch.nan_to_num(distances, nan=0.0), dim=-1))
             else:
                 raise ValueError(f"Invalid feature name: {name}")
 
