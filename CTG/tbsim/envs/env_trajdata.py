@@ -227,7 +227,8 @@ class EnvUnifiedSimulation(BaseEnv, BatchedEnv):
             "raster_from_world",
             "map_names",
             "agent_name",
-            "maps"
+            "maps",
+            "scene_ids"
         ]
         info_keys_to_log = [
             "action_samples",
