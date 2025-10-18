@@ -92,7 +92,7 @@ class GPUAwareLaneDetector:
             }
 
         if self.return_tensor:
-            distances = torch.from_numpy(distances_cpu).to(device)
+            distances = torch.from_numpy(distances_cpu).to(device=device, dtype=torch.float32)
         else:
             distances = distances_cpu
         return distances
