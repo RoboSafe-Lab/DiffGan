@@ -39,15 +39,6 @@ def _is_within_search_box_vectorized(points, vehicle_pos_px, cos_yaw, sin_yaw, m
     return (np.abs(local_x) < max_along) & (np.abs(local_y) < max_perp)
 
 
-def _prepare_boundary_mask(cv_image, tolerance=25):
-    rgb_image = cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB).astype(np.float32)
-    diff_dividers = np.sqrt(np.sum((rgb_image - COLOR_DIVIDERS_RGB[np.newaxis, np.newaxis, :]) ** 2, axis=2))
-    diff_crosswalks = np.sqrt(np.sum((rgb_image - COLOR_CROSSWALKS_RGB[np.newaxis, np.newaxis, :]) ** 2, axis=2))
-
-    mask = (diff_dividers < tolerance) | (diff_crosswalks < tolerance)
-    return mask.astype(np.uint8)
-
-
 def _find_initial_boundary_optimized(start_pos, direction, boundary_mask, vehicle_state, max_search_dist=500):
     height, width = boundary_mask.shape
     vx, vy = vehicle_state["vehicle_pos_px"]
@@ -226,7 +217,70 @@ def _get_pixel_extent(raster_from_agent):
 
 
 def _calculate_single_frame_distance(boundary_mask, vehicle_pos_px, vehicle_yaw_rad, search_limits_px):
+    """
+    Calculate distance from vehicle to lane center.
+
+    NEW: Checks if vehicle is on lane before computing distance.
+    boundary_mask: 1 = boundary (dividers/crosswalks), 0 = lane area
+    If vehicle is NOT on lane (boundary_mask == 1), returns distance = 0.0.
+    """
     results = {"status": "Failure", "distance": np.nan}
+
+    # NEW: Check if vehicle is on lane
+    # boundary_mask: 1 = boundary, 0 = lane
+    # Check both vehicle center and front position
+    height, width = boundary_mask.shape
+
+    # Vehicle center
+    px_center = int(round(vehicle_pos_px[0]))
+    py_center = int(round(vehicle_pos_px[1]))
+
+    # Check center is in bounds
+    if not (0 <= px_center < width and 0 <= py_center < height):
+        results["status_detail"] = "Vehicle position outside image bounds"
+        return results
+
+    # Check center is on lane
+    if boundary_mask[py_center, px_center] != 0:
+        # Vehicle center is on boundary (NOT on lane area)
+        results.update({
+            "status": "Success",
+            "distance": 0.0,
+            "status_detail": "Vehicle center not on lane (on boundary/off-road)"
+        })
+        return results
+
+    # Calculate vehicle front position
+    # Vehicle front = center + (vehicle_length/2) * heading_direction
+    # We use search_limits_px[0] as an approximation of vehicle length in pixels
+    vehicle_length_px = search_limits_px[0] / SEARCH_BOX_L_MULTIPLIER
+    # IMPORTANT: Use the SAME direction as visualization arrow to match coordinate system
+    # Visualization uses [-cos, sin], so we use the same here
+    heading_vec = np.array([-np.cos(vehicle_yaw_rad), np.sin(vehicle_yaw_rad)])
+    front_offset = heading_vec * vehicle_length_px / 2.0
+
+    pos_front = vehicle_pos_px + front_offset
+    px_front = int(round(pos_front[0]))
+    py_front = int(round(pos_front[1]))
+
+    # Check front is in bounds
+    if not (0 <= px_front < width and 0 <= py_front < height):
+        results.update({
+            "status": "Success",
+            "distance": 0.0,
+            "status_detail": "Vehicle front outside image bounds"
+        })
+        return results
+
+    # Check front is on lane
+    if boundary_mask[py_front, px_front] != 0:
+        # Vehicle front is on boundary (NOT on lane area)
+        results.update({
+            "status": "Success",
+            "distance": 0.0,
+            "status_detail": "Vehicle front not on lane (on boundary/off-road)"
+        })
+        return results
 
     cos_yaw = np.cos(-vehicle_yaw_rad)
     sin_yaw = np.sin(-vehicle_yaw_rad)
@@ -303,30 +357,24 @@ def _calculate_single_frame_distance(boundary_mask, vehicle_pos_px, vehicle_yaw_
 # BATCH PROCESSING FUNCTION (OPTIMIZED)
 # ==============================================================================
 def calculate_lane_distances(pos, yaw, maps, raster_from_agent, debug=False):
+    """
+    Calculate lane distances for vehicle trajectory.
+
+    OPTIMIZED: Directly extract boundary masks from map channels instead of
+    creating BGR images and doing color matching.
+    """
     T = pos.shape[0]
     distances = np.full(T, np.nan)
 
-    cv_images = []
     boundary_masks = []
 
     for t in range(T):
-        drivable, dividers, crosswalks = maps[t, 0], maps[t, 1], maps[t, 2]
-        h, w = drivable.shape
-        rgba = np.zeros((h, w, 4), dtype=np.float32)
+        dividers = maps[t, 1]
+        crosswalks = maps[t, 2]
 
-        color_drivable = np.array([200, 211, 213]) / 255.0
-        color_dividers = np.array([164, 184, 196]) / 255.0
-        color_crosswalks = np.array([96, 117, 138]) / 255.0
-
-        rgba[crosswalks > 0, :3] = color_crosswalks
-        rgba[drivable > 0, :3] = color_drivable
-        rgba[dividers > 0, :3] = color_dividers
-        rgba[drivable > 0, 3] = 1.0
-
-        cv_image = cv2.cvtColor((rgba[:, :, :3] * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
-        cv_images.append(cv_image)
-
-        boundary_mask = _prepare_boundary_mask(cv_image)
+        # OPTIMIZED: Direct extraction instead of color matching
+        # boundary_mask: 1 = boundary (dividers/crosswalks), 0 = lane area
+        boundary_mask = ((dividers > 0) | (crosswalks > 0)).astype(np.uint8)
         boundary_masks.append(boundary_mask)
 
     pos_px = np.zeros((T, 2))
@@ -349,16 +397,30 @@ def calculate_lane_distances(pos, yaw, maps, raster_from_agent, debug=False):
         if result["status"] == "Success":
             distances[t] = result["distance"]
 
-
     if debug:
-        _show_debug_visualization(T, cv_images, pos_px, yaw, raster_from_agent, results_list)
+        # Only create visualization images when debug mode is enabled
+        _show_debug_visualization(T, boundary_masks, pos_px, yaw, raster_from_agent, results_list)
 
     return distances
 
 
-def _show_debug_visualization(T, cv_images, pos_px, yaw, raster_from_agent, results_list):
+def _show_debug_visualization(T, boundary_masks, pos_px, yaw, raster_from_agent, results_list):
+    """
+    Visualize lane detection results.
+
+    Args:
+        boundary_masks: List of boundary masks (1 = boundary, 0 = lane)
+    """
     root = tk.Tk()
     root.title("Lane Distance Debug Viewer - Use ←→ keys or buttons to navigate")
+
+    # Convert boundary masks to RGB images for visualization
+    # Same logic as first file: white for boundaries, black for background
+    rgb_images = []
+    for mask in boundary_masks:
+        img = np.zeros((*mask.shape, 3), dtype=np.uint8)
+        img[mask > 0] = [255, 255, 255]  # White for boundaries
+        rgb_images.append(img)
 
     fig, ax = plt.subplots(figsize=(10, 10))
     canvas = FigureCanvasTkAgg(fig, master=root)
@@ -428,8 +490,8 @@ def _show_debug_visualization(T, cv_images, pos_px, yaw, raster_from_agent, resu
 
         frame_label.config(text=f"Frame: {t} / {T - 1}")
 
-        rgba = cv2.cvtColor(cv_images[t], cv2.COLOR_BGR2RGB)
-        ax.imshow(rgba)
+        # Display the RGB image (white boundaries on black background)
+        ax.imshow(rgb_images[t])
         ax.grid(False)
 
         vehicle_pos = pos_px[t]
@@ -441,12 +503,13 @@ def _show_debug_visualization(T, cv_images, pos_px, yaw, raster_from_agent, resu
         ax.plot(np.append(box[:, 0], box[0, 0]), np.append(box[:, 1], box[0, 1]),
                 color='purple', lw=2, zorder=10)
 
-        heading_vec = np.array([np.cos(yaw_rad), -np.sin(yaw_rad)])
+        heading_vec = np.array([-np.cos(yaw_rad), np.sin(yaw_rad)])
         ax.arrow(vehicle_pos[0], vehicle_pos[1], heading_vec[0] * 20, heading_vec[1] * 20,
                  head_width=5, head_length=5, fc='red', ec='red', lw=2, zorder=11)
 
         result = results_list[t]
-        if result["status"] == "Success":
+        if result["status"] == "Success" and "global_points1" in result:
+            # Only draw lane detection results if full calculation was performed
             for pt in result["global_points1"]:
                 ax.plot(pt[0], pt[1], 'o', color='yellow', markersize=1)
             for pt in result["global_points2"]:
@@ -471,6 +534,9 @@ def _show_debug_visualization(T, cv_images, pos_px, yaw, raster_from_agent, resu
                     color='red', lw=2)
 
             title = f"T={t} | Status: Success | Distance: {result['distance']:.2f} px"
+        elif result["status"] == "Success" and result["distance"] == 0.0:
+            # Vehicle not on lane (center or front off-road)
+            title = f"T={t} | Status: Off-Lane | Distance: 0.0 px | {result.get('status_detail', 'N/A')}"
         else:
             title = f"T={t} | Status: {result['status']} | {result.get('status_detail', 'N/A')}"
 
@@ -487,7 +553,7 @@ def _show_debug_visualization(T, cv_images, pos_px, yaw, raster_from_agent, resu
 # EXAMPLE USAGE
 # ==============================================================================
 if __name__ == '__main__':
-    d = np.load("data2.npy", allow_pickle=True).item()
+    d = np.load("../CTG/scripts/map_layer_plots/data2.npy", allow_pickle=True).item()
     ids = d['ids']
     traj = d['traj']
 

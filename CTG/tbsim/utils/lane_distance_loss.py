@@ -15,8 +15,8 @@ class GPUAwareLaneDetector:
         self.debug = debug
 
         # Algorithm parameters (aligned with optimized version)
-        self.search_box_l_mult = 8.0
-        self.search_box_w_mult = 8.0
+        self.search_box_l_mult = 4.0
+        self.search_box_w_mult = 4.0
         self.color_tolerance = 25
         self.bfs_max_points = 50
         self.min_points_for_direction = 15
@@ -56,6 +56,7 @@ class GPUAwareLaneDetector:
 
         with torch.no_grad():
             # Prepare boundary masks (OPTIMIZED: vectorized on GPU)
+            # boundary_masks: 1 = boundary (dividers/crosswalks), 0 = lane area
             boundary_masks_gpu = self._prepare_boundary_masks_gpu(data_batch['maps'])
 
             positions_px_gpu = self._transform_to_pixel_gpu(
@@ -124,7 +125,9 @@ class GPUAwareLaneDetector:
             maps: (B, C, H, W) with channels [drivable, dividers, crosswalks]
 
         Returns:
-            boundary_masks: (B, H, W) binary mask where 1 = boundary pixel
+            boundary_masks: (B, H, W) binary mask where:
+                1 = boundary pixel (dividers/crosswalks) - NOT on lane
+                0 = lane area - ON lane
         """
         B, _, H, W = maps.shape
         device = maps.device
@@ -363,6 +366,10 @@ class GPUAwareLaneDetector:
         """
         OPTIMIZED: Static method for computing distance using pre-computed boundary mask.
         Based on the efficient algorithm from lane_distance.py.
+
+        NEW: Checks if vehicle is on lane before computing distance.
+        boundary_mask: 1 = boundary (dividers/crosswalks), 0 = lane area
+        If vehicle is NOT on lane (boundary_mask == 1), returns distance = 0.0.
         """
         try:
             if not np.isfinite(pos_px).all() or not np.isfinite(yaw) or not np.isfinite(limit).all():
@@ -374,6 +381,47 @@ class GPUAwareLaneDetector:
             if pos_px[0] < 0 or pos_px[0] >= w or pos_px[1] < 0 or pos_px[1] >= h:
                 return GPUAwareLaneDetector._create_result_static(
                     np.nan, "Vehicle position outside image bounds", debug
+                )
+
+            # NEW: Check if vehicle is on lane
+            # boundary_mask: 1 = boundary, 0 = lane
+            # Check both vehicle center and front position
+
+            # Vehicle center
+            px_center = int(round(pos_px[0]))
+            py_center = int(round(pos_px[1]))
+
+            # Check center is in bounds and on lane
+            if boundary_mask[py_center, px_center] != 0:
+                # Vehicle center is on boundary (NOT on lane area)
+                return GPUAwareLaneDetector._create_result_static(
+                    0.0, "Vehicle center not on lane (on boundary/off-road)", debug
+                )
+
+            # Calculate vehicle front position
+            # Vehicle front = center + (vehicle_length/2) * heading_direction
+            # We use limit[0] as an approximation of vehicle length in pixels
+            vehicle_length_px = limit[0] / 8.0  # limit is search_box_l_mult * length, so divide by mult
+            # Use standard direction (front is where the vehicle is heading)
+            heading_vec = np.array([np.cos(yaw), np.sin(yaw)])
+            front_offset = heading_vec * vehicle_length_px / 2.0
+
+            pos_front = pos_px + front_offset
+            px_front = int(round(pos_front[0]))
+            py_front = int(round(pos_front[1]))
+
+            # Check front is in bounds
+            if not (0 <= px_front < w and 0 <= py_front < h):
+                # Front position is outside image bounds
+                return GPUAwareLaneDetector._create_result_static(
+                    0.0, "Vehicle front outside image bounds", debug
+                )
+
+            # Check front is on lane
+            if boundary_mask[py_front, px_front] != 0:
+                # Vehicle front is on boundary (NOT on lane area)
+                return GPUAwareLaneDetector._create_result_static(
+                    0.0, "Vehicle front not on lane (on boundary/off-road)", debug
                 )
 
             # Precompute vehicle state for fast lookup
@@ -731,6 +779,7 @@ class LaneDetectionVisualizer:
 
         self.ax.plot(pos_px[0], pos_px[1], 'o', color='red', markersize=10, label='Vehicle')
 
+        # Visualization arrow (should match front calculation direction)
         heading_vec = np.array([np.cos(yaw), np.sin(yaw)])
         arrow_len = 30
         self.ax.arrow(
@@ -836,7 +885,7 @@ if __name__ == '__main__':
     distances = compute_lane_distances(
         x_tensor,
         data_batch_tensor,
-        n_workers=1,
+        n_workers=4,
         return_tensor=True,
         use_multiprocessing=True
     )
