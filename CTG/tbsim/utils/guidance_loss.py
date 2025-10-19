@@ -17,6 +17,8 @@ from tbsim.utils.trajdata_utils import get_current_lane_projection, get_left_lan
 from torch.autograd import Variable
 import tbsim.utils.tensor_utils as TensorUtils
 
+from tbsim.utils.lane_distance_loss import compute_lane_distances
+
 ### utils for choosing from samples ####
 
 def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses):
@@ -769,7 +771,24 @@ class MapCollisionLoss(GuidanceLoss):
 
         return agt_coords_agent_frame, agt_coords_raster_frame
 
-    def forward(self, x, data_batch, agt_mask=None):   
+    def forward(self, x, data_batch, agt_mask=None):
+
+        # # Detach all tensors in data_batch that require grad
+        # data_batch_detached = {}
+        # for key, value in data_batch.items():
+        #     if isinstance(value, torch.Tensor):
+        #         data_batch_detached[key] = value.cpu().numpy()
+        #     else:
+        #         data_batch_detached[key] = value
+        # scene_ids = data_batch_detached['scene_index'][0]
+        # sd={
+        #     'x': x.detach().cpu().numpy(),
+        #     'data_batch': data_batch_detached
+        # }
+        # np.save(rf"C:\myAppData\CTGTest\CTG\scripts\a_lat\d{scene_ids}.npy", sd)
+        # print(f'saved {scene_ids}')
+
+
         drivable_map = data_batch["drivable_map"]
 
         # Punishment beyond the dividing line
@@ -2366,8 +2385,7 @@ class LearnedRewardGuidance(GuidanceLoss):
                     feats_out.append(torch.zeros((B, N), device=device))
 
             elif name=='lane_distance':
-                from tbsim.utils.lane_distance_loss import compute_lane_distances
-                distances = compute_lane_distances(x, data_batch)
+                distances = compute_lane_distances(x, data_batch, use_multiprocessing=False)
                 feats_out.append(torch.mean(torch.nan_to_num(distances, nan=0.0), dim=-1))
             else:
                 raise ValueError(f"Invalid feature name: {name}")

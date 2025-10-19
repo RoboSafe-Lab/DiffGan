@@ -4,6 +4,7 @@ import cv2
 from typing import Dict, Tuple, List
 from multiprocessing import Pool, cpu_count
 from functools import partial
+from collections import deque
 import traceback
 
 
@@ -13,18 +14,18 @@ class GPUAwareLaneDetector:
         self.return_tensor = return_tensor
         self.debug = debug
 
-        # Algorithm parameters
-        self.search_box_l_mult = 4.0
-        self.search_box_w_mult = 4.0
+        # Algorithm parameters (aligned with optimized version)
+        self.search_box_l_mult = 8.0
+        self.search_box_w_mult = 8.0
         self.color_tolerance = 25
-        self.bfs_max_points = 100
+        self.bfs_max_points = 50
         self.min_points_for_direction = 15
-        self.march_steps = 100
+        self.march_steps = 50
         self.march_step_size = 2
         self.march_probe_range = 5
         self.min_points_for_final_fit = 25
 
-        # Target colors
+        # Target colors (RGB)
         self.color_dividers = np.array([164, 184, 196])
         self.color_crosswalks = np.array([96, 117, 138])
 
@@ -54,7 +55,9 @@ class GPUAwareLaneDetector:
         B, N, T, _ = x.shape
 
         with torch.no_grad():
-            bgr_images_gpu = self._prepare_bgr_images_gpu(data_batch['maps'])
+            # Prepare boundary masks (OPTIMIZED: vectorized on GPU)
+            boundary_masks_gpu = self._prepare_boundary_masks_gpu(data_batch['maps'])
+
             positions_px_gpu = self._transform_to_pixel_gpu(
                 x[..., :2],
                 data_batch['raster_from_agent']
@@ -66,24 +69,25 @@ class GPUAwareLaneDetector:
 
             yaws_gpu = x[..., 3]
 
-        bgr_images_cpu = bgr_images_gpu.cpu().numpy()  # (B, H, W, 3)
+        # Transfer to CPU for CV operations
+        boundary_masks_cpu = boundary_masks_gpu.cpu().numpy().astype(np.uint8)  # (B, H, W)
         positions_px_cpu = positions_px_gpu.cpu().numpy()  # (B, N, T, 2)
         yaws_cpu = yaws_gpu.cpu().numpy()  # (B, N, T)
         search_limits_cpu = search_limits_gpu.cpu().numpy()  # (B, 2)
 
         if use_multiprocessing and self.n_workers > 1:
             distances_cpu, debug_results = self._process_parallel(
-                B, N, T, bgr_images_cpu, positions_px_cpu, yaws_cpu, search_limits_cpu
+                B, N, T, boundary_masks_cpu, positions_px_cpu, yaws_cpu, search_limits_cpu
             )
         else:
             distances_cpu, debug_results = self._process_sequential(
-                B, N, T, bgr_images_cpu, positions_px_cpu, yaws_cpu, search_limits_cpu
+                B, N, T, boundary_masks_cpu, positions_px_cpu, yaws_cpu, search_limits_cpu
             )
 
         if self.debug:
             self.debug_info = {
                 'B': B, 'N': N, 'T': T,
-                'bgr_images': bgr_images_cpu,
+                'boundary_masks': boundary_masks_cpu,
                 'positions_px': positions_px_cpu,
                 'yaws': yaws_cpu,
                 'search_limits': search_limits_cpu,
@@ -111,31 +115,28 @@ class GPUAwareLaneDetector:
         visualizer = LaneDetectionVisualizer(self.debug_info, self)
         visualizer.show()
 
-    def _prepare_bgr_images_gpu(self, maps: torch.Tensor) -> torch.Tensor:
+    def _prepare_boundary_masks_gpu(self, maps: torch.Tensor) -> torch.Tensor:
+        """
+        OPTIMIZED: Prepare boundary masks directly on GPU using vectorized operations.
+        This replaces the old _prepare_bgr_images_gpu + per-pixel checking approach.
 
+        Args:
+            maps: (B, C, H, W) with channels [drivable, dividers, crosswalks]
+
+        Returns:
+            boundary_masks: (B, H, W) binary mask where 1 = boundary pixel
+        """
         B, _, H, W = maps.shape
         device = maps.device
 
-        drivable = maps[:, 0]  # (B, H, W)
-        dividers = maps[:, 1]
-        crosswalks = maps[:, 2]
+        dividers = maps[:, 1]  # (B, H, W)
+        crosswalks = maps[:, 2]  # (B, H, W)
 
-        color_drivable = torch.tensor([213, 211, 200], device=device, dtype=torch.uint8)
-        color_dividers = torch.tensor([196, 184, 164], device=device, dtype=torch.uint8)
-        color_crosswalks = torch.tensor([138, 117, 96], device=device, dtype=torch.uint8)
+        # Create binary boundary mask: any pixel that is divider OR crosswalk
+        # This is much faster than checking colors pixel-by-pixel
+        boundary_masks = ((dividers > 0) | (crosswalks > 0)).float()
 
-        bgr = torch.zeros((B, H, W, 3), device=device, dtype=torch.uint8)
-
-        for b in range(B):
-            mask_drivable = drivable[b] > 0
-            mask_dividers = dividers[b] > 0
-            mask_crosswalks = crosswalks[b] > 0
-
-            bgr[b, mask_drivable] = color_drivable
-            bgr[b, mask_dividers] = color_dividers
-            bgr[b, mask_crosswalks] = color_crosswalks
-
-        return bgr
+        return boundary_masks
 
     def _transform_to_pixel_gpu(
             self,
@@ -216,28 +217,29 @@ class GPUAwareLaneDetector:
     def _process_parallel(
             self,
             B: int, N: int, T: int,
-            bgr_images: np.ndarray,
+            boundary_masks: np.ndarray,
             positions_px: np.ndarray,
             yaws: np.ndarray,
             search_limits: np.ndarray
     ) -> Tuple[np.ndarray, List]:
-        tasks = []
+        """
+        OPTIMIZED: Process in parallel at batch level instead of individual samples.
+        This reduces the overhead of creating tasks and transferring data.
+        """
+        # Create tasks at batch level (B tasks instead of B*N*T tasks)
+        batch_tasks = []
         for b in range(B):
-            for n in range(N):
-                for t in range(T):
-                    tasks.append((
-                        b, n, t,
-                        bgr_images[b],
-                        positions_px[b, n, t],
-                        yaws[b, n, t],
-                        search_limits[b]
-                    ))
+            batch_tasks.append((
+                b,
+                boundary_masks[b],
+                positions_px[b],  # (N, T, 2)
+                yaws[b],  # (N, T)
+                search_limits[b]
+            ))
 
+        # Worker function with parameters
         worker_fn = partial(
-            self._compute_single_sample_worker,
-            color_dividers=self.color_dividers,
-            color_crosswalks=self.color_crosswalks,
-            color_tolerance=self.color_tolerance,
+            self._compute_batch_worker,
             bfs_max_points=self.bfs_max_points,
             min_points_for_direction=self.min_points_for_direction,
             march_steps=self.march_steps,
@@ -251,21 +253,20 @@ class GPUAwareLaneDetector:
         debug_results = [[[None for _ in range(T)] for _ in range(N)] for _ in range(B)]
 
         with Pool(processes=self.n_workers) as pool:
-            results = pool.map(worker_fn, tasks, chunksize=32)
+            batch_results = pool.map(worker_fn, batch_tasks)
 
-        for (b, n, t, _, _, _, _), result in zip(tasks, results):
+        # Unpack results
+        for b, (batch_distances, batch_debug) in enumerate(batch_results):
+            distances[b] = batch_distances
             if self.debug:
-                distances[b, n, t] = result['distance']
-                debug_results[b][n][t] = result
-            else:
-                distances[b, n, t] = result
+                debug_results[b] = batch_debug
 
         return distances, debug_results
 
     def _process_sequential(
             self,
             B: int, N: int, T: int,
-            bgr_images: np.ndarray,
+            boundary_masks: np.ndarray,
             positions_px: np.ndarray,
             yaws: np.ndarray,
             search_limits: np.ndarray
@@ -274,70 +275,146 @@ class GPUAwareLaneDetector:
         debug_results = [[[None for _ in range(T)] for _ in range(N)] for _ in range(B)]
 
         total = B * N * T
-        for idx, (b, n, t) in enumerate(np.ndindex(B, N, T)):
-            if idx % 100 == 0:
-                print(f"  Progress: {idx}/{total} ({100 * idx / total:.1f}%)")
+        for b in range(B):
+            for n in range(N):
+                for t in range(T):
+                    idx = b * N * T + n * T + t
+                    if idx % 100 == 0:
+                        print(f"  Progress: {idx}/{total} ({100 * idx / total:.1f}%)")
 
-            result = self._compute_single_sample(
-                bgr_images[b],
-                positions_px[b, n, t],
-                yaws[b, n, t],
-                search_limits[b]
-            )
+                    result = self._compute_single_sample(
+                        boundary_masks[b],
+                        positions_px[b, n, t],
+                        yaws[b, n, t],
+                        search_limits[b]
+                    )
 
-            if self.debug:
-                distances[b, n, t] = result['distance']
-                debug_results[b][n][t] = result
-            else:
-                distances[b, n, t] = result
+                    if self.debug:
+                        distances[b, n, t] = result['distance']
+                        debug_results[b][n][t] = result
+                    else:
+                        distances[b, n, t] = result
 
         return distances, debug_results
 
     @staticmethod
-    def _compute_single_sample_worker(task, **params):
-        b, n, t, bgr_image, pos_px, yaw, limit = task
+    def _compute_batch_worker(task, **params):
+        """
+        OPTIMIZED: Process entire batch (N, T) samples with shared boundary mask.
+        This eliminates the overhead of creating detector instances per sample.
+        """
+        b, boundary_mask, positions_px_batch, yaws_batch, search_limits = task
+        N, T = positions_px_batch.shape[:2]
 
-        debug = params.pop('debug', False)
-        detector = GPUAwareLaneDetector(n_workers=1, return_tensor=False, debug=debug)
+        distances = np.full((N, T), np.nan)
+        debug_results = [[None for _ in range(T)] for _ in range(N)]
 
-        for key, value in params.items():
-            setattr(detector, key, value)
+        for n in range(N):
+            for t in range(T):
+                result = GPUAwareLaneDetector._compute_single_sample_static(
+                    boundary_mask,
+                    positions_px_batch[n, t],
+                    yaws_batch[n, t],
+                    search_limits,
+                    **params
+                )
 
-        return detector._compute_single_sample(bgr_image, pos_px, yaw, limit)
+                if params.get('debug', False):
+                    distances[n, t] = result['distance']
+                    debug_results[n][t] = result
+                else:
+                    distances[n, t] = result
+
+        return distances, debug_results
 
     def _compute_single_sample(
             self,
-            bgr_image: np.ndarray,
+            boundary_mask: np.ndarray,
             pos_px: np.ndarray,
             yaw: float,
             limit: np.ndarray
     ):
+        """Instance method wrapper for compatibility."""
+        return self._compute_single_sample_static(
+            boundary_mask, pos_px, yaw, limit,
+            bfs_max_points=self.bfs_max_points,
+            min_points_for_direction=self.min_points_for_direction,
+            march_steps=self.march_steps,
+            march_step_size=self.march_step_size,
+            march_probe_range=self.march_probe_range,
+            min_points_for_final_fit=self.min_points_for_final_fit,
+            debug=self.debug
+        )
+
+    @staticmethod
+    def _compute_single_sample_static(
+            boundary_mask: np.ndarray,
+            pos_px: np.ndarray,
+            yaw: float,
+            limit: np.ndarray,
+            bfs_max_points: int = 50,
+            min_points_for_direction: int = 15,
+            march_steps: int = 50,
+            march_step_size: int = 2,
+            march_probe_range: int = 5,
+            min_points_for_final_fit: int = 25,
+            debug: bool = False
+    ):
+        """
+        OPTIMIZED: Static method for computing distance using pre-computed boundary mask.
+        Based on the efficient algorithm from lane_distance.py.
+        """
         try:
             if not np.isfinite(pos_px).all() or not np.isfinite(yaw) or not np.isfinite(limit).all():
-                return self._create_result(np.nan, "Invalid input values (NaN or Inf)")
+                return GPUAwareLaneDetector._create_result_static(
+                    np.nan, "Invalid input values (NaN or Inf)", debug
+                )
 
-            h, w = bgr_image.shape[:2]
+            h, w = boundary_mask.shape
             if pos_px[0] < 0 or pos_px[0] >= w or pos_px[1] < 0 or pos_px[1] >= h:
-                return self._create_result(np.nan, "Vehicle position outside image bounds")
+                return GPUAwareLaneDetector._create_result_static(
+                    np.nan, "Vehicle position outside image bounds", debug
+                )
+
+            # Precompute vehicle state for fast lookup
+            cos_yaw = np.cos(-yaw)
+            sin_yaw = np.sin(-yaw)
+            vehicle_state = {
+                'vehicle_pos_px': pos_px,
+                'cos_sin_yaw': (cos_yaw, sin_yaw),
+                'search_limits_px': limit
+            }
 
             heading = np.array([np.cos(yaw), np.sin(yaw)])
             perp = np.array([-heading[1], heading[0]])
 
-            b1 = self._find_boundary(pos_px, perp, bgr_image, pos_px, yaw, limit)
-            b2 = self._find_boundary(pos_px, -perp, bgr_image, pos_px, yaw, limit)
+            # Find initial boundaries (optimized)
+            b1 = GPUAwareLaneDetector._find_initial_boundary_optimized(
+                pos_px, perp, boundary_mask, vehicle_state
+            )
+            b2 = GPUAwareLaneDetector._find_initial_boundary_optimized(
+                pos_px, -perp, boundary_mask, vehicle_state
+            )
 
             if b1 is None or b2 is None:
-                return self._create_result(np.nan, "Could not find initial boundary points")
-
-            pts1 = self._bfs_search(b1, bgr_image, pos_px, yaw, limit)
-            pts2 = self._bfs_search(b2, bgr_image, pos_px, yaw, limit)
-
-            if len(pts1) < self.min_points_for_direction or len(pts2) < self.min_points_for_direction:
-                return self._create_result(
-                    np.nan,
-                    f"Not enough local points ({len(pts1)}, {len(pts2)})"
+                return GPUAwareLaneDetector._create_result_static(
+                    np.nan, "Could not find initial boundary points", debug
                 )
 
+            # BFS search for local points
+            pts1 = GPUAwareLaneDetector._find_local_points_bfs_optimized(
+                b1, boundary_mask, vehicle_state, bfs_max_points
+            )
+            pts2 = GPUAwareLaneDetector._find_local_points_bfs_optimized(
+                b2, boundary_mask, vehicle_state, bfs_max_points
+            )
+
+            if len(pts1) < min_points_for_direction or len(pts2) < min_points_for_direction:
+                return GPUAwareLaneDetector._create_result_static(
+                    np.nan, f"Not enough local points ({len(pts1)}, {len(pts2)})", debug
+                )
+
+            # Fit lines to determine lane direction
             dir1 = cv2.fitLine(pts1, cv2.DIST_L2, 0, 0.01, 0.01)[:2].flatten()
             dir2 = cv2.fitLine(pts2, cv2.DIST_L2, 0, 0.01, 0.01)[:2].flatten()
 
@@ -347,31 +424,38 @@ class GPUAwareLaneDetector:
             final_dir = (dir1 + dir2) / 2.0
             final_dir /= np.linalg.norm(final_dir)
 
-            global_pts1 = self._march_search(b1, final_dir, bgr_image, pos_px, yaw, limit)
-            global_pts2 = self._march_search(b2, final_dir, bgr_image, pos_px, yaw, limit)
+            # March search for global points
+            global_pts1 = GPUAwareLaneDetector._find_global_points_marching_optimized(
+                b1, final_dir, boundary_mask, vehicle_state, march_steps, march_step_size, march_probe_range
+            )
+            global_pts2 = GPUAwareLaneDetector._find_global_points_marching_optimized(
+                b2, final_dir, boundary_mask, vehicle_state, march_steps, march_step_size, march_probe_range
+            )
 
-            if len(global_pts1) < self.min_points_for_final_fit or \
-                    len(global_pts2) < self.min_points_for_final_fit:
-                return self._create_result(
-                    np.nan,
-                    f"Not enough global points ({len(global_pts1)}, {len(global_pts2)})"
+            if len(global_pts1) < min_points_for_final_fit or len(global_pts2) < min_points_for_final_fit:
+                return GPUAwareLaneDetector._create_result_static(
+                    np.nan, f"Not enough global points ({len(global_pts1)}, {len(global_pts2)})", debug
                 )
 
+            # Fit final lines
             line1 = cv2.fitLine(global_pts1, cv2.DIST_L2, 0, 0.01, 0.01)
             line2 = cv2.fitLine(global_pts2, cv2.DIST_L2, 0, 0.01, 0.01)
 
-            proj1 = self._project_point(pos_px, line1)
-            proj2 = self._project_point(pos_px, line2)
+            proj1 = GPUAwareLaneDetector._project_point(pos_px, line1)
+            proj2 = GPUAwareLaneDetector._project_point(pos_px, line2)
             center = (proj1 + proj2) / 2.0
 
             distance = np.linalg.norm(pos_px - center)
 
             if not np.isfinite(distance):
-                return self._create_result(np.nan, "Computed distance is invalid")
+                return GPUAwareLaneDetector._create_result_static(
+                    np.nan, "Computed distance is invalid", debug
+                )
 
-            return self._create_result(
+            return GPUAwareLaneDetector._create_result_static(
                 float(distance),
                 "Success",
+                debug,
                 global_points1=global_pts1,
                 global_points2=global_pts2,
                 line1_params=line1,
@@ -384,13 +468,19 @@ class GPUAwareLaneDetector:
 
         except Exception as e:
             error_msg = f"Exception: {type(e).__name__}: {str(e)}"
-            if self.debug:
+            if debug:
                 error_msg += f"\n{traceback.format_exc()}"
             print(f"[ERROR] {error_msg}")
-            return self._create_result(np.nan, error_msg)
+            return GPUAwareLaneDetector._create_result_static(np.nan, error_msg, debug)
 
     def _create_result(self, distance, status, **kwargs):
-        if self.debug:
+        """Instance method wrapper."""
+        return self._create_result_static(distance, status, self.debug, **kwargs)
+
+    @staticmethod
+    def _create_result_static(distance, status, debug, **kwargs):
+        """Static method for creating results."""
+        if debug:
             result = {
                 'distance': distance,
                 'status': 'Success' if np.isfinite(distance) else 'Failure',
@@ -401,112 +491,172 @@ class GPUAwareLaneDetector:
         else:
             return distance
 
-    def _find_boundary(self, start, direction, img, veh_pos, veh_yaw, limit):
-        h, w = img.shape[:2]
-        for i in range(1, 500):
-            point = start + direction * i
-            px, py = point.round().astype(int)
+    @staticmethod
+    def _is_within_search_box_vectorized(points, vehicle_pos_px, cos_yaw, sin_yaw, max_along, max_perp):
+        """OPTIMIZED: Vectorized search box check."""
+        vec_to_points = points - vehicle_pos_px
+        local_x = cos_yaw * vec_to_points[:, 0] - sin_yaw * vec_to_points[:, 1]
+        local_y = sin_yaw * vec_to_points[:, 0] + cos_yaw * vec_to_points[:, 1]
+        return (np.abs(local_x) < max_along) & (np.abs(local_y) < max_perp)
 
-            if px < 0 or px >= w or py < 0 or py >= h:
+    @staticmethod
+    def _find_initial_boundary_optimized(start_pos, direction, boundary_mask, vehicle_state, max_search_dist=500):
+        """OPTIMIZED: Vectorized initial boundary search."""
+        height, width = boundary_mask.shape
+        vx, vy = vehicle_state["vehicle_pos_px"]
+        cos_yaw, sin_yaw = vehicle_state["cos_sin_yaw"]
+        max_along, max_perp = vehicle_state["search_limits_px"]
+
+        steps = np.arange(1, min(max_search_dist, 500))
+        search_points = start_pos + direction * steps[:, np.newaxis]
+        search_points_int = np.round(search_points).astype(np.int32)
+
+        valid_mask = ((search_points_int[:, 0] >= 0) & (search_points_int[:, 0] < width) &
+                      (search_points_int[:, 1] >= 0) & (search_points_int[:, 1] < height))
+
+        valid_indices = np.where(valid_mask)[0]
+        if len(valid_indices) == 0:
+            return None
+
+        valid_points = search_points_int[valid_indices]
+
+        in_box = GPUAwareLaneDetector._is_within_search_box_vectorized(
+            valid_points.astype(float),
+            np.array([vx, vy]),
+            cos_yaw, sin_yaw,
+            max_along, max_perp
+        )
+
+        first_outside = np.where(~in_box)[0]
+        if len(first_outside) > 0:
+            valid_points = valid_points[:first_outside[0]]
+            if len(valid_points) == 0:
                 return None
 
-            if not self._in_search_box((px, py), veh_pos, veh_yaw, limit):
-                return None
+        for pt in valid_points:
+            if boundary_mask[pt[1], pt[0]] > 0:
+                return tuple(pt)
 
-            if self._is_boundary(img[py, px]):
-                return np.array([px, py], dtype=np.float64)
         return None
 
-    def _is_boundary(self, pixel_bgr):
-        if pixel_bgr is None or len(pixel_bgr) != 3:
-            return False
+    @staticmethod
+    def _find_local_points_bfs_optimized(start_node, boundary_mask, vehicle_state, bfs_max_points):
+        """OPTIMIZED: BFS search with boundary mask."""
+        if start_node is None:
+            return np.array([])
 
-        pixel_rgb = pixel_bgr[::-1].astype(np.float64)
+        height, width = boundary_mask.shape
+        vx, vy = vehicle_state["vehicle_pos_px"]
+        cos_yaw, sin_yaw = vehicle_state["cos_sin_yaw"]
+        max_along, max_perp = vehicle_state["search_limits_px"]
 
-        dist_divider = np.linalg.norm(pixel_rgb - self.color_dividers)
-        dist_crosswalk = np.linalg.norm(pixel_rgb - self.color_crosswalks)
+        line_points = []
+        q = deque([start_node])
+        visited = np.zeros((height, width), dtype=bool)
+        visited[start_node[1], start_node[0]] = True
 
-        return dist_divider < self.color_tolerance or dist_crosswalk < self.color_tolerance
+        directions = np.array([[-1, 0], [1, 0], [0, -1], [0, 1]], dtype=np.int32)
 
-    def _in_search_box(self, point, veh_pos, veh_yaw, limit):
-        vec = np.array(point) - veh_pos
-        cos_yaw, sin_yaw = np.cos(-veh_yaw), np.sin(-veh_yaw)
-        local = np.array([
-            cos_yaw * vec[0] - sin_yaw * vec[1],
-            sin_yaw * vec[0] + cos_yaw * vec[1]
-        ])
-        return abs(local[0]) < limit[0] and abs(local[1]) < limit[1]
+        while q and len(line_points) < bfs_max_points:
+            x, y = q.popleft()
+            line_points.append([x, y])
 
-    def _bfs_search(self, start, img, veh_pos, veh_yaw, limit):
-        from collections import deque
+            neighbors = np.array([[x, y]], dtype=np.int32) + directions
 
-        h, w = img.shape[:2]
-        points = []
-        start_tuple = tuple(start.round().astype(int))
-        queue = deque([start_tuple])
-        visited = {start_tuple}
+            valid = ((neighbors[:, 0] >= 0) & (neighbors[:, 0] < width) &
+                     (neighbors[:, 1] >= 0) & (neighbors[:, 1] < height))
 
-        while queue and len(points) < self.bfs_max_points:
-            x, y = queue.popleft()
-            points.append([x, y])
+            for i, (nx, ny) in enumerate(neighbors):
+                if valid[i] and not visited[ny, nx] and boundary_mask[ny, nx] > 0:
+                    in_box = GPUAwareLaneDetector._is_within_search_box_vectorized(
+                        np.array([[nx, ny]], dtype=float),
+                        np.array([vx, vy]),
+                        cos_yaw, sin_yaw,
+                        max_along, max_perp
+                    )[0]
 
-            for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                nx, ny = x + dx, y + dy
+                    if in_box:
+                        visited[ny, nx] = True
+                        q.append((nx, ny))
 
-                if nx < 0 or nx >= w or ny < 0 or ny >= h:
-                    continue
+        return np.array(line_points, dtype=np.int32)
 
-                if (nx, ny) in visited:
-                    continue
+    @staticmethod
+    def _find_global_points_marching_optimized(start_node, line_direction, boundary_mask, vehicle_state,
+                                                march_steps, march_step_size, march_probe_range):
+        """OPTIMIZED: Marching search with boundary mask."""
+        if start_node is None:
+            return np.array([])
 
-                if not self._in_search_box((nx, ny), veh_pos, veh_yaw, limit):
-                    continue
+        height, width = boundary_mask.shape
+        vx, vy = vehicle_state["vehicle_pos_px"]
+        cos_yaw, sin_yaw = vehicle_state["cos_sin_yaw"]
+        max_along, max_perp = vehicle_state["search_limits_px"]
 
-                if self._is_boundary(img[ny, nx]):
-                    visited.add((nx, ny))
-                    queue.append((nx, ny))
+        probe_direction = np.array([-line_direction[1], line_direction[0]])
+        line_points = [start_node]
 
-        return np.array(points, dtype=np.int32) if points else np.array([], dtype=np.int32).reshape(0, 2)
+        for direction_multiplier in [1, -1]:
+            current_pos = np.array(start_node, dtype=float)
+            step_vec = line_direction * march_step_size * direction_multiplier
 
-    def _march_search(self, start, direction, img, veh_pos, veh_yaw, limit):
-        h, w = img.shape[:2]
-        probe_dir = np.array([-direction[1], direction[0]])
-        points = [start]
+            for _ in range(march_steps):
+                current_pos += step_vec
 
-        for mult in [1, -1]:
-            pos = start.copy().astype(np.float64)
-
-            for _ in range(self.march_steps):
-                pos += direction * self.march_step_size * mult
-
-                if not self._in_search_box(pos, veh_pos, veh_yaw, limit):
+                cx, cy = int(round(current_pos[0])), int(round(current_pos[1]))
+                if not (0 <= cx < width and 0 <= cy < height):
                     break
 
-                found = None
-                for dist in range(self.march_probe_range + 1):
-                    for pm in ([1, -1] if dist > 0 else [1]):
-                        probe = pos + probe_dir * dist * pm
-                        px, py = probe.round().astype(int)
+                in_box = GPUAwareLaneDetector._is_within_search_box_vectorized(
+                    current_pos.reshape(1, 2),
+                    np.array([vx, vy]),
+                    cos_yaw, sin_yaw,
+                    max_along, max_perp
+                )[0]
 
-                        if px < 0 or px >= w or py < 0 or py >= h:
-                            continue
+                if not in_box:
+                    break
 
-                        if self._in_search_box((px, py), veh_pos, veh_yaw, limit) and \
-                                self._is_boundary(img[py, px]):
-                            found = np.array([px, py], dtype=np.float64)
-                            break
-                    if found is not None:
+                best_point_found = None
+
+                for probe_dist in range(march_probe_range + 1):
+                    if probe_dist == 0:
+                        probe_points = current_pos.reshape(1, 2)
+                    else:
+                        probe_points = np.vstack([
+                            current_pos + probe_direction * probe_dist,
+                            current_pos - probe_direction * probe_dist
+                        ])
+
+                    probe_points_int = np.round(probe_points).astype(np.int32)
+
+                    for px, py in probe_points_int:
+                        if (0 <= px < width and 0 <= py < height and boundary_mask[py, px] > 0):
+                            in_probe_box = GPUAwareLaneDetector._is_within_search_box_vectorized(
+                                np.array([[px, py]], dtype=float),
+                                np.array([vx, vy]),
+                                cos_yaw, sin_yaw,
+                                max_along, max_perp
+                            )[0]
+
+                            if in_probe_box:
+                                best_point_found = (px, py)
+                                break
+
+                    if best_point_found:
                         break
 
-                if found is not None:
-                    points.append(found)
-                    pos = found.copy()
+                if best_point_found:
+                    line_points.append(best_point_found)
+                    current_pos = np.array(best_point_found, dtype=float)
                 else:
                     break
 
-        return np.array(points, dtype=np.int32) if len(points) > 1 else np.array([], dtype=np.int32).reshape(0, 2)
+        return np.array(line_points, dtype=np.int32)
 
-    def _project_point(self, point, line_params):
+    @staticmethod
+    def _project_point(point, line_params):
+        """Project point onto line."""
         vx, vy, x0, y0 = line_params.flatten()
         v = np.array([vx, vy])
         p0 = np.array([x0, y0])
@@ -524,14 +674,20 @@ class LaneDetectionVisualizer:
         self.N = debug_info['N']
         self.T = debug_info['T']
 
-        self.bgr_images = debug_info['bgr_images']
+        self.boundary_masks = debug_info['boundary_masks']
         self.positions_px = debug_info['positions_px']
         self.yaws = debug_info['yaws']
         self.search_limits = debug_info['search_limits']
         self.results = debug_info['results']
         self.distances = debug_info['distances']
 
-        self.rgb_images = [cv2.cvtColor(img, cv2.COLOR_BGR2RGB) for img in self.bgr_images]
+        # Convert boundary masks to RGB images for visualization
+        self.rgb_images = []
+        for mask in self.boundary_masks:
+            # Create a grayscale image where boundaries are white
+            img = np.zeros((*mask.shape, 3), dtype=np.uint8)
+            img[mask > 0] = [255, 255, 255]  # White for boundaries
+            self.rgb_images.append(img)
 
     def show(self):
         import matplotlib
@@ -661,7 +817,7 @@ def compute_lane_distances(
 if __name__ == '__main__':
     import time
 
-    d = np.load(r"C:\myAppData\pythonProject\CTG-Cloud\CTG\scripts\map_layer_plots\data.npy", allow_pickle=True).item()
+    d = np.load(r"C:\myAppData\CTGTest\CTG\scripts\map_layer_plots\data.npy", allow_pickle=True).item()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
@@ -680,7 +836,7 @@ if __name__ == '__main__':
     distances = compute_lane_distances(
         x_tensor,
         data_batch_tensor,
-        n_workers=12,
+        n_workers=1,
         return_tensor=True,
         use_multiprocessing=True
     )
