@@ -820,7 +820,7 @@ class IRLFeatureExtractor:
             # print(f"    Agent {dyn_aid}: Avg THW - Front: {avg_front:.1f}s, Left: {avg_left:.1f}s, Right: {avg_right:.1f}s")
 
         # calculate lane distance
-        if 'lane_distance' in feature_names:
+        if 'lane_distance' in feature_names or 'lane_distance_p2' in feature_names:
             from MaxEntIRL.lane_distance import calculate_lane_distances
             import time
 
@@ -856,13 +856,8 @@ class IRLFeatureExtractor:
             if 'a_lateral' in feature_names and a_lat.shape[1] > 0:
                 feats['a_lateral'] = a_lat[i]
 
-            if 'a_long_abs' in feature_names and a_long.shape[1] > 0:
-                feats['a_long_abs'] = np.abs(a_long[i])
-            if 'jerk_long_abs' in feature_names and jerk.shape[1] > 0:
-                feats['jerk_long_abs'] = np.abs(jerk[i])
-            if 'a_lateral_abs' in feature_names and a_lat.shape[1] > 0:
-                feats['a_lateral_abs'] = np.abs(a_lat[i])
-
+            if 'velocity_p2' in feature_names and speed.shape[1] > 0:
+                feats['velocity_p2'] = np.power(speed[i], 2)
             if 'a_long_p2' in feature_names and a_long.shape[1] > 0:
                 feats['a_long_p2'] = np.power(a_long[i], 2)
             if 'jerk_long_p2' in feature_names and jerk.shape[1] > 0:
@@ -878,9 +873,19 @@ class IRLFeatureExtractor:
             if 'right_thw' in feature_names and TT > 0:
                 feats['right_thw'] = right_exp_thw_all[i]
 
+            if 'front_thw_p2' in feature_names and TT > 0:
+                feats['front_thw_p2'] = np.power(front_exp_thw_all[i], 2)
+            if 'left_thw_p2' in feature_names and TT > 0:
+                feats['left_thw_p2'] = np.power(left_exp_thw_all[i], 2)
+            if 'right_thw_p2' in feature_names and TT > 0:
+                feats['right_thw_p2'] = np.power(right_exp_thw_all[i], 2)
+
             # lane distance
             if 'lane_distance' in feature_names:
                 feats['lane_distance'] = lane_distance_all[i]
+
+            if 'lane_distance_p2' in feature_names:
+                feats['lane_distance_p2'] = np.power(lane_distance_all[i], 2)
 
             agent_features[aid] = feats
     

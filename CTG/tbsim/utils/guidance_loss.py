@@ -2186,7 +2186,7 @@ class LearnedRewardGuidance(GuidanceLoss):
         feats_out = []
 
         # --- Common THW calculation for all THW features ---
-        calculate_thw = any(f in feature_names for f in ["front_thw", "left_thw", "right_thw"])
+        calculate_thw = any(f in feature_names for f in ["front_thw", "left_thw", "right_thw", "front_thw_p2", "left_thw_p2", "right_thw_p2"])
         
         if calculate_thw and T > 0:
             speed_mask = vel >= 0.1  # (B, N, T)
@@ -2256,17 +2256,14 @@ class LearnedRewardGuidance(GuidanceLoss):
                 f = torch.mean(vel, dim=-1) if T > 0 else torch.zeros((B, N), device=device)
                 feats_out.append(f)
 
+            elif name == "velocity_p2":
+                f = torch.mean(torch.pow(vel, 2), dim=-1) if T > 0 else torch.zeros((B, N), device=device)
+                feats_out.append(f)
+
             elif name == "a_long":
                 if T > 1:
                     a = tdiff(vel) / dt  # (B,N,T-1)
                     feats_out.append(torch.mean(a, dim=-1))
-                else:
-                    feats_out.append(torch.zeros((B, N), device=device))
-
-            elif name == "a_long_abs":
-                if T > 1:
-                    a = tdiff(vel) / dt  # (B,N,T-1)
-                    feats_out.append(torch.mean(torch.abs(a), dim=-1))
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
@@ -2285,14 +2282,6 @@ class LearnedRewardGuidance(GuidanceLoss):
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
-            elif name == "jerk_long_abs":
-                if T > 2:
-                    a = tdiff(vel) / dt              # (B,N,T-1)
-                    j = tdiff(a) / dt                # (B,N,T-2)
-                    feats_out.append(torch.mean(torch.abs(j), dim=-1))
-                else:
-                    feats_out.append(torch.zeros((B, N), device=device))
-
             elif name == "jerk_long_p2":
                 if T > 2:
                     a = tdiff(vel) / dt              # (B,N,T-1)
@@ -2307,15 +2296,6 @@ class LearnedRewardGuidance(GuidanceLoss):
                     v_mid = 0.5 * (vel[..., :-1] + vel[..., 1:])  # (B,N,T-1)
                     a_lat = yaw_rate * v_mid
                     feats_out.append(torch.mean(a_lat, dim=-1))
-                else:
-                    feats_out.append(torch.zeros((B, N), device=device))
-
-            elif name == "a_lateral_abs":
-                if T > 1:
-                    yaw_rate = tdiff(yaw_w) / dt     # (B,N,T-1)
-                    v_mid = 0.5 * (vel[..., :-1] + vel[..., 1:])  # (B,N,T-1)
-                    a_lat = yaw_rate * v_mid
-                    feats_out.append(torch.mean(torch.abs(a_lat), dim=-1))
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
@@ -2366,12 +2346,30 @@ class LearnedRewardGuidance(GuidanceLoss):
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
+            elif name == "front_thw_p2":
+                if T > 0:
+                    # Apply exponential decay and handle inf values
+                    front_thw_exp = torch.exp(-front_thw_raw_all)
+                    front_thw_exp = torch.where(front_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), front_thw_exp) # replace inf with 0 after exp decay
+                    feats_out.append(torch.mean(torch.pow(front_thw_exp, 2), dim=-1)) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
             elif name == "left_thw":
                 if T > 0:
                     # Apply exponential decay and handle inf values
                     left_thw_exp = torch.exp(-left_thw_raw_all)
                     left_thw_exp = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_exp) # replace inf with 0 after exp decay
                     feats_out.append(torch.mean(left_thw_exp, dim=-1)) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "left_thw_p2":
+                if T > 0:
+                    # Apply exponential decay and handle inf values
+                    left_thw_exp = torch.exp(-left_thw_raw_all)
+                    left_thw_exp = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_exp) # replace inf with 0 after exp decay
+                    feats_out.append(torch.mean(torch.pow(left_thw_exp, 2), dim=-1)) # (B, N)
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
@@ -2384,9 +2382,23 @@ class LearnedRewardGuidance(GuidanceLoss):
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
+            elif name == "right_thw_p2":
+                if T > 0:
+                    # Apply exponential decay and handle inf values
+                    right_thw_exp = torch.exp(-right_thw_raw_all)
+                    right_thw_exp = torch.where(right_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), right_thw_exp) # replace inf with 0 after exp decay
+                    feats_out.append(torch.mean(torch.pow(right_thw_exp, 2), dim=-1)) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
             elif name=='lane_distance':
                 distances = compute_lane_distances(x, data_batch, use_multiprocessing=False)
                 feats_out.append(torch.mean(torch.nan_to_num(distances, nan=0.0), dim=-1))
+
+            elif name=='lane_distance_p2':
+                distances = compute_lane_distances(x, data_batch, use_multiprocessing=False)
+                feats_out.append(torch.mean(torch.nan_to_num(torch.pow(distances, 2), nan=0.0), dim=-1))
+
             else:
                 raise ValueError(f"Invalid feature name: {name}")
 
