@@ -562,7 +562,7 @@ class IRLFeatureExtractor:
                         agent_history = state_np.reshape(1, -1)
 
                         lane = get_closest_lane_point_for_one_agent(agent_history, vector_map, world_from_agent_tf, agent_from_world_tf, vec_map_params)
-
+                        lane = lane.numpy()
                         # Store all data
                         agent_positions.append([x, y])
                         agent_velocities.append([vx, vy])
