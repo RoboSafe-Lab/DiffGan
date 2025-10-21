@@ -1,3 +1,4 @@
+import numpy
 import numpy as np
 import os
 import torch
@@ -13,7 +14,9 @@ from tbsim.utils.batch_utils import set_global_batch_type
 from tbsim.utils.trajdata_utils import set_global_trajdata_batch_env, set_global_trajdata_batch_raster_cfg
 from tbsim.utils.scene_edit_utils import guided_rollout, compute_heuristic_guidance, merge_guidance_configs
 import tbsim.utils.tensor_utils as TensorUtils
-            
+
+from MaxEntIRL.lane_distance_loss import calculate_lane_distance
+
 class IRLFeatureExtractor:
     def __init__(self, eval_cfg, config=default_config):
         self.config = config
@@ -428,8 +431,9 @@ class IRLFeatureExtractor:
                 # Get centroid data
                 centroids = np.asarray(buffer['centroid'])
                 yaws = np.asarray(buffer['yaw'])
-                maps = np.asarray(buffer['maps'])
-                rasters = np.asarray(buffer['raster_from_world'])
+                # maps = np.asarray(buffer['maps'])
+                # rasters = np.asarray(buffer['raster_from_world'])
+                lanes = np.asarray(buffer['closest_lane_point'])
                     
                 # Create dictionary with agent_id as key for a rollout
                 for i, unique_agent_id in enumerate(unique_agent_ids):
@@ -437,8 +441,9 @@ class IRLFeatureExtractor:
                         agents_per_rollout[unique_agent_id] = {
                             'positions': centroids[i],
                             'yaw': yaws[i],
-                            'map': maps[i],
-                            'raster': rasters[i],
+                            # 'map': maps[i],
+                            # 'raster': rasters[i],
+                            'lanes': lanes[i],
                         }
 
                 if agents_per_rollout:
@@ -821,26 +826,12 @@ class IRLFeatureExtractor:
 
         # calculate lane distance
         if 'lane_distance' in feature_names or 'lane_distance_p2' in feature_names:
-            from MaxEntIRL.lane_distance import calculate_lane_distances
-            import time
-
-            lane_distance_all = np.zeros((D, TT), dtype=np.float32)
-            st = time.time()
-
-            for i, aid in enumerate(dynamic_agent_ids):
+            lane_distance_all = []
+            for i, aid in enumerate(valid_dynamic_agents):
                 data = agent_trajectories_dict[aid]
-                pos = data['positions']
-                yaw = data['yaw']
-                maps = data['map']
-                raster = data['raster']
-                distances = calculate_lane_distances(pos, yaw, maps, raster)
-                nan_sum = np.sum(np.isnan(distances))
-                if nan_sum:
-                    print(f"lane distance: {nan_sum} nan/{TT} total")
-
-                lane_distance_all[i, :] = np.nan_to_num(distances, nan=0.0)[:TT]
-
-            print(f"total time of lane distance: {time.time() - st}")
+                distances = calculate_lane_distance(pos[i], data['lanes'])
+                print(f"valid lane distance:{np.sum(~np.isnan(distances))}/{distances.size}")
+                lane_distance_all.append(np.nan_to_num(distances,nan=0))
         
         # Step 9: Assemble features for each dynamic agent
         agent_features = {}

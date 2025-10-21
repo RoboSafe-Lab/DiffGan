@@ -228,7 +228,8 @@ class EnvUnifiedSimulation(BaseEnv, BatchedEnv):
             "map_names",
             "agent_name",
             "maps",
-            "scene_ids"
+            "scene_ids",
+            "closest_lane_point"
         ]
         info_keys_to_log = [
             "action_samples",
@@ -453,6 +454,7 @@ class EnvUnifiedSimulation(BaseEnv, BatchedEnv):
             obs_skimp["agents"]["map_names"] = obs["map_names"]
             obs_skimp["agents"]['drivable_map'] = obs['drivable_map']
             obs_skimp["agents"]['maps'] = obs['maps']
+            obs_skimp["agents"]['closest_lane_point'] = obs['extras']['closest_lane_point']
             self._add_per_step_metrics(obs_skimp["agents"], self._frame_index+action_index)
             if self._log_data:
                 # log_agents_info = action_info.copy()
