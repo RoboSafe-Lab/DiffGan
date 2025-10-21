@@ -17,7 +17,7 @@ from tbsim.utils.trajdata_utils import get_current_lane_projection, get_left_lan
 from torch.autograd import Variable
 import tbsim.utils.tensor_utils as TensorUtils
 
-from tbsim.utils.lane_distance_loss import compute_lane_distances
+from tbsim.utils.lane_distance_loss import calculate_lane_distance
 
 ### utils for choosing from samples ####
 
@@ -2392,11 +2392,11 @@ class LearnedRewardGuidance(GuidanceLoss):
                     feats_out.append(torch.zeros((B, N), device=device))
 
             elif name=='lane_distance':
-                distances = compute_lane_distances(x, data_batch, use_multiprocessing=False)
+                distances = calculate_lane_distance(x, data_batch)
                 feats_out.append(torch.mean(torch.nan_to_num(distances, nan=0.0), dim=-1))
 
             elif name=='lane_distance_p2':
-                distances = compute_lane_distances(x, data_batch, use_multiprocessing=False)
+                distances = calculate_lane_distance(x, data_batch)
                 feats_out.append(torch.mean(torch.nan_to_num(torch.pow(distances, 2), nan=0.0), dim=-1))
 
             else:
