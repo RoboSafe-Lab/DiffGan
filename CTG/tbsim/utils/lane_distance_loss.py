@@ -137,8 +137,3 @@ def calculate_lane_distance(x, data_batch):
     return distances
 
 
-if __name__ == '__main__':
-
-    valid_distances = distances_full[~torch.isnan(distances_full)]
-
-
