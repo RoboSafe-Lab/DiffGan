@@ -1,3 +1,5 @@
+import time
+
 import numpy
 import numpy as np
 import os
@@ -16,6 +18,11 @@ from tbsim.utils.scene_edit_utils import guided_rollout, compute_heuristic_guida
 import tbsim.utils.tensor_utils as TensorUtils
 
 from MaxEntIRL.lane_distance_loss import calculate_lane_distance
+from tbsim.utils.trajdata_utils import get_closest_lane_point_for_one_agent
+
+from trajdata.maps import VectorMap
+from trajdata.utils import map_utils
+from pathlib import Path
 
 class IRLFeatureExtractor:
     def __init__(self, eval_cfg, config=default_config):
@@ -471,6 +478,30 @@ class IRLFeatureExtractor:
                 return None
             
             gt_trajectories = {}
+
+            # 获取地图路径
+            maps_path = current_scene.cache.path / current_scene.scene.env_name / "maps"
+            vector_map_path = maps_path / f"{current_scene.scene.location}.pb"
+            kdtrees_path = maps_path / f"{current_scene.scene.location}_kdtrees.dill"
+
+            # 加载 protobuf 格式的地图
+            stored_vec_map = map_utils.load_vector_map(vector_map_path)
+
+            # 转换为 VectorMap 对象
+            vector_map = VectorMap.from_proto(stored_vec_map)
+
+            # 加载预计算的 kdtrees（用于快速查找）
+            vector_map.search_kdtrees = map_utils.load_kdtrees(kdtrees_path)
+
+            vec_map_params = {
+                'S_seg': 15,
+                'S_point': 80,
+                'map_max_dist': 80,
+                'max_heading_error': 0.25 * np.pi,
+                'ahead_threshold': -40,
+                'dist_weight': 1.0,
+                'heading_weight': 0.1,
+            }
             
             # Step 1: Extract gt trajectories for each agent with full state info
             for agent_idx, (agent, agent_name) in enumerate(zip(agents, agent_names)):           
@@ -481,6 +512,7 @@ class IRLFeatureExtractor:
                 agent_speeds = []
                 agent_maps = []
                 agent_rasters = []
+                agent_lanes = []
 
                 for frame_offset in range(self.config.horizon):
                     frame_idx = start_frame + frame_offset
@@ -517,7 +549,20 @@ class IRLFeatureExtractor:
 
                         # Get map
                         map, raster, _ = current_scene.cache.load_map_patch(x, y, 400, 2.0, (0, 0), heading, return_rgb=True)
-                        
+
+                        # Get lanes
+                        # 构建从 agent 坐标系到 world 坐标系的变换矩阵
+                        world_from_agent_tf = np.array([
+                            [cos_h, -sin_h, x],
+                            [sin_h, cos_h, y],
+                            [0.0, 0.0, 1.0]
+                        ])
+
+                        agent_from_world_tf = np.linalg.inv(world_from_agent_tf)
+                        agent_history = state_np.reshape(1, -1)
+
+                        lane = get_closest_lane_point_for_one_agent(agent_history, vector_map, world_from_agent_tf, agent_from_world_tf, vec_map_params)
+
                         # Store all data
                         agent_positions.append([x, y])
                         agent_velocities.append([vx, vy])
@@ -526,6 +571,7 @@ class IRLFeatureExtractor:
                         agent_headings.append(heading)
                         agent_maps.append(map)
                         agent_rasters.append(raster)
+                        agent_lanes.append(lane)
 
                     else:
                         # No data returned, skip frame
@@ -540,7 +586,8 @@ class IRLFeatureExtractor:
                         'speeds': np.array(agent_speeds),
                         'yaw': np.array(agent_headings),
                         'map': np.array(agent_maps),
-                        'raster': np.array(agent_rasters)
+                        'raster': np.array(agent_rasters),
+                        'lanes': np.array(agent_lanes),
                     }                               
                 else:
                     print(f"      Agent {agent_name} (ID {agent_idx}): insufficient data ({len(agent_positions)} positions)")
@@ -548,7 +595,8 @@ class IRLFeatureExtractor:
             return gt_trajectories
             
         except Exception as e:
-            print(f"      Error extracting GT from cache: {e}")
+            import traceback
+            print(f"      Error extracting GT from cache: {e}:{traceback.print_exc()}")
             return None
 
     def _process_frame_trajectories(self, scene_idx, scene_name, frame_number, rollout_trajectories, ground_truth):
