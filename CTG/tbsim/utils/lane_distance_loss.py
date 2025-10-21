@@ -282,8 +282,7 @@ class GPUAwareLaneDetector:
             for n in range(N):
                 for t in range(T):
                     idx = b * N * T + n * T + t
-                    if idx % 100 == 0:
-                        print(f"  Progress: {idx}/{total} ({100 * idx / total:.1f}%)")
+                    
 
                     result = self._compute_single_sample(
                         boundary_masks[b],
