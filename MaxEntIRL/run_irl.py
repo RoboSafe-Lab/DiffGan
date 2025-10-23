@@ -52,8 +52,8 @@ class MaxEntIRL:
         Aggregation = mean over time. normalized by z-score.
         """
         # Define which features should NOT be normalized
-        no_norm_features = {'front_thw', 'left_thw', 'right_thw'}
-
+        # no_norm_features = {'front_thw', 'left_thw', 'right_thw'}
+        no_norm_features = {}
         if isinstance(features, dict):
             vals = []
             for name in self.feature_names:
