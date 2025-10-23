@@ -789,9 +789,9 @@ class IRLFeatureExtractor:
         all_pos = np.stack(all_agent_positions, axis=0).astype(np.float32)  # [A_all, TT, 2]
         
         # Initialize time headway arrays
-        # front_exp_thw_all = np.zeros((D, TT), dtype=np.float32)
-        # left_exp_thw_all = np.zeros((D, TT), dtype=np.float32)
-        # right_exp_thw_all = np.zeros((D, TT), dtype=np.float32)
+        front_exp_thw_all = np.zeros((D, TT), dtype=np.float32)
+        left_exp_thw_all = np.zeros((D, TT), dtype=np.float32)
+        right_exp_thw_all = np.zeros((D, TT), dtype=np.float32)
         front_thw_all = np.zeros((D, TT), dtype=np.float32)
         left_thw_all = np.zeros((D, TT), dtype=np.float32)
         right_thw_all = np.zeros((D, TT), dtype=np.float32)
@@ -863,13 +863,13 @@ class IRLFeatureExtractor:
 
                 # Set minimum THW for each direction
                 if min_front_thw != float('inf'):
-                    # front_exp_thw_all[i, t] = np.exp(-min_front_thw)
+                    front_exp_thw_all[i, t] = np.exp(-min_front_thw)
                     front_thw_all[i, t] = min_front_thw
                 if min_left_thw != float('inf'):
-                    # left_exp_thw_all[i, t] = np.exp(-min_left_thw)
+                    left_exp_thw_all[i, t] = np.exp(-min_left_thw)
                     left_thw_all[i, t] = min_left_thw
                 if min_right_thw != float('inf'):
-                    # right_exp_thw_all[i, t] = np.exp(-min_right_thw)
+                    right_exp_thw_all[i, t] = np.exp(-min_right_thw)
                     right_thw_all[i, t] = min_right_thw
 
             # Debug info
@@ -912,14 +912,14 @@ class IRLFeatureExtractor:
             
             # Time Headway features
             if 'front_thw' in feature_names and TT > 0:
-                # feats['front_thw'] = front_exp_thw_all[i]
-                feats['front_thw'] = front_thw_all[i]
+                feats['front_thw'] = front_exp_thw_all[i]
+                # feats['front_thw'] = front_thw_all[i]
             if 'left_thw' in feature_names and TT > 0:
-                # feats['left_thw'] = left_exp_thw_all[i]
-                feats['left_thw'] = left_thw_all[i]
+                feats['left_thw'] = left_exp_thw_all[i]
+                # feats['left_thw'] = left_thw_all[i]
             if 'right_thw' in feature_names and TT > 0:
-                # feats['right_thw'] = right_exp_thw_all[i]
-                feats['right_thw'] = right_thw_all[i]
+                feats['right_thw'] = right_exp_thw_all[i]
+                # feats['right_thw'] = right_thw_all[i]
 
             if 'front_thw_p2' in feature_names and TT > 0:
                 # feats['front_thw_p2'] = np.power(front_exp_thw_all[i], 2)

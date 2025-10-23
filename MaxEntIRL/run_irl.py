@@ -10,7 +10,7 @@ class MaxEntIRL:
         self,
         feature_names: Optional[List[str]] = None,
         n_iters: int = 200,
-        lr: float = 0.01,
+        lr: float = 0.001,
         beta1: float = 0.9,
         beta2: float = 0.999,
         eps: float = 1e-8,
@@ -52,8 +52,7 @@ class MaxEntIRL:
         Aggregation = mean over time. normalized by z-score.
         """
         # Define which features should NOT be normalized
-        # no_norm_features = {'front_thw', 'left_thw', 'right_thw'}
-        no_norm_features = {}
+        no_norm_features = {'front_thw', 'left_thw', 'right_thw'}
         if isinstance(features, dict):
             vals = []
             for name in self.feature_names:
@@ -70,6 +69,9 @@ class MaxEntIRL:
                 if feature_name not in no_norm_features:
                     normalized_vec[i] = (vec[i] - self.norm_mean[i]) / (self.norm_std[i] + self.eps)
                 # Proximity features remain unchanged (no normalization)
+                else:
+                    # Avoid norm in CTG
+                    self.norm_mean[i], self.norm_std[i] = 0, 1
             vec = normalized_vec
         return vec
 

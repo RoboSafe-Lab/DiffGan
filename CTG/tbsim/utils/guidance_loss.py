@@ -2340,10 +2340,10 @@ class LearnedRewardGuidance(GuidanceLoss):
             elif name == "front_thw":
                 if T > 0:
                     # Apply exponential decay and handle inf values
-                    # front_thw_exp = torch.exp(-front_thw_raw_all)
-                    # front_thw_exp = torch.where(front_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), front_thw_exp) # replace inf with 0 after exp decay
-                    front_thw_all = torch.where(front_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), front_thw_raw_all)
-                    feats_out.append(torch.mean(front_thw_all, dim=-1)) # (B, N)
+                    front_thw_exp = torch.exp(-front_thw_raw_all)
+                    front_thw_exp = torch.where(front_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), front_thw_exp) # replace inf with 0 after exp decay
+                    # front_thw_all = torch.where(front_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), front_thw_raw_all)
+                    feats_out.append(torch.mean(front_thw_exp, dim=-1)) # (B, N)
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
@@ -2360,10 +2360,10 @@ class LearnedRewardGuidance(GuidanceLoss):
             elif name == "left_thw":
                 if T > 0:
                     # Apply exponential decay and handle inf values
-                    # left_thw_exp = torch.exp(-left_thw_raw_all)
-                    # left_thw_exp = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_exp) # replace inf with 0 after exp decay
-                    left_thw_all = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_raw_all)
-                    feats_out.append(torch.mean(left_thw_all, dim=-1)) # (B, N)
+                    left_thw_exp = torch.exp(-left_thw_raw_all)
+                    left_thw_exp = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_exp) # replace inf with 0 after exp decay
+                    # left_thw_all = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_raw_all)
+                    feats_out.append(torch.mean(left_thw_exp, dim=-1)) # (B, N)
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
@@ -2380,10 +2380,10 @@ class LearnedRewardGuidance(GuidanceLoss):
             elif name == "right_thw":
                 if T > 0:
                     # Apply exponential decay and handle inf values
-                    # right_thw_exp = torch.exp(-right_thw_raw_all)
-                    # right_thw_exp = torch.where(right_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), right_thw_exp) # replace inf with 0 after exp decay
-                    right_thw_all = torch.where(right_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), right_thw_raw_all)
-                    feats_out.append(torch.mean(right_thw_all, dim=-1)) # (B, N)
+                    right_thw_exp = torch.exp(-right_thw_raw_all)
+                    right_thw_exp = torch.where(right_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), right_thw_exp) # replace inf with 0 after exp decay
+                    # right_thw_all = torch.where(right_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), right_thw_raw_all)
+                    feats_out.append(torch.mean(right_thw_exp, dim=-1)) # (B, N)
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
