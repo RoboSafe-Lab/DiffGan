@@ -10,7 +10,7 @@ class MaxEntIRL:
         self,
         feature_names: Optional[List[str]] = None,
         n_iters: int = 200,
-        lr: float = 0.01,
+        lr: float = 0.001,
         beta1: float = 0.9,
         beta2: float = 0.999,
         eps: float = 1e-8,
