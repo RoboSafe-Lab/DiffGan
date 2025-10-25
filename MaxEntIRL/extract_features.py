@@ -931,6 +931,13 @@ class IRLFeatureExtractor:
                 # feats['right_thw_p2'] = np.power(right_exp_thw_all[i], 2)
                 feats['right_thw_p2'] = np.power(right_thw_all[i], 2)
 
+            if 'front_thw_p2_exp' in feature_names and TT > 0:
+                feats['front_thw_p2_exp'] = np.exp(-np.power(front_thw_all[i], 2))
+            if 'left_thw_p2_exp' in feature_names and TT > 0:
+                feats['left_thw_p2_exp'] = np.exp(-np.power(left_thw_all[i], 2))
+            if 'right_thw_p2_exp' in feature_names and TT > 0:
+                feats['right_thw_p2_exp'] = np.exp(-np.power(right_thw_all[i], 2))
+
             # lane distance
             if 'lane_distance' in feature_names:
                 feats['lane_distance'] = lane_distance_all[i]
