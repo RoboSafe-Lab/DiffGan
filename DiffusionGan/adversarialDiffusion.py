@@ -352,22 +352,22 @@ class AdversarialIRLDiffusion:
     
     def save_checkpoint(self, iteration):
         """Save training checkpoint"""
-        if iteration == self.config.num_iterations - 1:
-            checkpoint = {
-                'iteration': iteration,
-                'theta': self.current_theta,
-                'training_history': self.training_history,
-            }
-            
-            # Create weights folder under output directory
-            weights_dir = os.path.join(self.config.output_dir, "weights")
-            os.makedirs(weights_dir, exist_ok=True)
+        # if iteration == self.config.num_iterations - 1:
+        checkpoint = {
+            "final_theta": self.current_theta,
+            "norm_mean": self.irl_norm_mean,
+            "norm_std": self.irl_norm_std
+        }
 
-            checkpoint_path = os.path.join(weights_dir, f"weights_{self.config.scene_location}_{self.config.wandb_run_name}_{iteration}.pkl")
-            with open(checkpoint_path, 'wb') as f:
-                pickle.dump(checkpoint, f)
-            
-            print(f"Checkpoint saved to {checkpoint_path}")
+        # Create weights folder under output directory
+        weights_dir = os.path.join(self.config.output_dir, "weights")
+        os.makedirs(weights_dir, exist_ok=True)
+
+        checkpoint_path = os.path.join(weights_dir, f"weights_{self.config.scene_location}_{self.config.wandb_run_name}_{iteration}.pkl")
+        with open(checkpoint_path, 'wb') as f:
+            pickle.dump(checkpoint, f)
+
+        print(f"Checkpoint saved to {checkpoint_path}")
         
         
         

@@ -2429,13 +2429,13 @@ class LearnedRewardGuidance(GuidanceLoss):
 
             elif name=='lane_distance':
                 distances = calculate_lane_distance(x, data_batch)
-                valid_distances = distances[~torch.isnan(distances)]
+                #valid_distances = distances[~torch.isnan(distances)]
                 #print(f"vaild lane distance: {valid_distances.numel()}/{distances.numel()}")
                 feats_out.append(torch.mean(torch.nan_to_num(distances, nan=0.0), dim=-1))
 
             elif name=='lane_distance_p2':
                 distances = calculate_lane_distance(x, data_batch)
-                valid_distances = distances[~torch.isnan(distances)]
+                #valid_distances = distances[~torch.isnan(distances)]
                 #print(f"vaild lane distance: {valid_distances.numel()}/{distances.numel()}")
                 feats_out.append(torch.mean(torch.nan_to_num(torch.pow(distances, 2), nan=0.0), dim=-1))
 
