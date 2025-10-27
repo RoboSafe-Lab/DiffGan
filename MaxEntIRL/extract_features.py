@@ -23,6 +23,8 @@ from tbsim.utils.trajdata_utils import get_closest_lane_point_for_one_agent
 from trajdata.maps import VectorMap
 from trajdata.utils import map_utils
 from pathlib import Path
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 class IRLFeatureExtractor:
     def __init__(self, eval_cfg, config=default_config):
@@ -510,8 +512,8 @@ class IRLFeatureExtractor:
                 agent_accelerations = []
                 agent_headings = []
                 agent_speeds = []
-                agent_maps = []
-                agent_rasters = []
+                #agent_maps = []
+                #agent_rasters = []
                 agent_lanes = []
 
                 for frame_offset in range(self.config.horizon):
@@ -548,7 +550,7 @@ class IRLFeatureExtractor:
                         heading = np.arctan2(sin_h, cos_h)  # Convert from sin/cos to angle
 
                         # Get map
-                        map, raster, _ = current_scene.cache.load_map_patch(x, y, 400, 2.0, (0, 0), heading, return_rgb=True)
+                        #map, raster, _ = current_scene.cache.load_map_patch(x, y, 400, 2.0, (0, 0), heading, return_rgb=True)
 
                         # Get lanes
                         # 构建从 agent 坐标系到 world 坐标系的变换矩阵
@@ -559,18 +561,47 @@ class IRLFeatureExtractor:
                         ])
 
                         agent_from_world_tf = np.linalg.inv(world_from_agent_tf)
-                        agent_history = state_np.reshape(1, -1)
 
-                        lane = get_closest_lane_point_for_one_agent(agent_history, vector_map, world_from_agent_tf, agent_from_world_tf, vec_map_params)
+                        # Convert state from world coordinate to agent coordinate
+                        # state_np is in world frame: [x, y, vx, vy, ax, ay, sin_h, cos_h]
+                        # Need to convert position and velocity to agent frame
+
+                        # Position in agent frame (should be [0, 0] for the agent itself)
+                        pos_world = np.array([x, y, 1.0])
+                        pos_agent = agent_from_world_tf @ pos_world
+
+                        # Velocity in agent frame (rotate velocity vector)
+                        vel_world = np.array([vx, vy])
+                        vel_agent = agent_from_world_tf[:2, :2] @ vel_world
+
+                        # Acceleration in agent frame (rotate acceleration vector)
+                        acc_world = np.array([ax, ay])
+                        acc_agent = agent_from_world_tf[:2, :2] @ acc_world
+
+                        # Heading in agent frame (should be 0 for the agent itself)
+                        heading_agent = 0.0
+                        sin_h_agent = np.sin(heading_agent)
+                        cos_h_agent = np.cos(heading_agent)
+
+                        # Construct agent_history in agent coordinate system
+                        agent_history_agent_frame = np.array([[
+                            pos_agent[0], pos_agent[1],
+                            vel_agent[0], vel_agent[1],
+                            acc_agent[0], acc_agent[1],
+                            sin_h_agent, cos_h_agent
+                        ]])
+
+                        lane = get_closest_lane_point_for_one_agent(agent_history_agent_frame, vector_map, world_from_agent_tf, agent_from_world_tf, vec_map_params)
                         lane = lane.numpy()
+
                         # Store all data
                         agent_positions.append([x, y])
                         agent_velocities.append([vx, vy])
                         agent_accelerations.append([ax, ay])
                         agent_speeds.append(speed)
                         agent_headings.append(heading)
-                        agent_maps.append(map)
-                        agent_rasters.append(raster)
+                        #agent_maps.append(map)
+                        #agent_rasters.append(raster)
                         agent_lanes.append(lane)
 
                     else:
@@ -585,8 +616,8 @@ class IRLFeatureExtractor:
                         'accelerations': np.array(agent_accelerations),
                         'speeds': np.array(agent_speeds),
                         'yaw': np.array(agent_headings),
-                        'map': np.array(agent_maps),
-                        'raster': np.array(agent_rasters),
+                        #'map': np.array(agent_maps),
+                        #'raster': np.array(agent_rasters),
                         'lanes': np.array(agent_lanes),
                     }                               
                 else:
