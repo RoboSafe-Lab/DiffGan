@@ -108,12 +108,13 @@ def calculate_lane_distance(pos, lanes):
             # 更新最小距离
             min_distance = min(min_distance, lane_distance)
 
-        # 处理无效的车辆位置（NaN）
+        # 处理无效的车辆位置（NaN）或没有找到有效车道
+        # Use 0.0 instead of NaN to avoid issues in feature extraction
         if np.isnan(vehicle_pos[0]) or np.isnan(vehicle_pos[1]):
-            distances[t] = np.nan
-        # 如果没有找到有效车道，设为NaN
+            distances[t] = 0.0
+        # 如果没有找到有效车道，设为0
         elif np.isinf(min_distance):
-            distances[t] = np.nan
+            distances[t] = 0.0
         else:
             distances[t] = min_distance
 

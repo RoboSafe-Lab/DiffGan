@@ -108,17 +108,18 @@ def calculate_lane_distance(x, data_batch):
     min_distances, _ = torch.min(min_lane_dist, dim=-1)  # (B, N, T)
 
     # 处理无效的车辆位置（NaN）
+    # Use 0.0 instead of NaN to avoid gradient issues during guidance optimization
     invalid_vehicles = torch.isnan(vehicle_positions[..., 0]) | torch.isnan(vehicle_positions[..., 1])
     min_distances = torch.where(
         invalid_vehicles,
-        torch.tensor(float('nan'), device=device, dtype=dtype),
+        torch.tensor(0.0, device=device, dtype=dtype),
         min_distances
     )
 
-    # 如果没有找到有效车道，设为NaN
+    # 如果没有找到有效车道，设为0而不是NaN，避免梯度计算中的NaN传播
     min_distances = torch.where(
         torch.isinf(min_distances),
-        torch.tensor(float('nan'), device=device, dtype=dtype),
+        torch.tensor(0.0, device=device, dtype=dtype),
         min_distances
     )
 
