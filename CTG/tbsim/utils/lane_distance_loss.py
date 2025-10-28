@@ -48,12 +48,13 @@ def calculate_lane_distance(x, data_batch):
     # (B, N, T, num_lanes, num_points)
     point_distances = torch.norm(vehicle_exp - lane_exp, dim=-1)
 
-    # 应用有效性mask，无效点设为inf
+    # 应用有效性mask，无效点设为大数（不用inf以避免梯度问题）
+    # Using a large finite value instead of inf to avoid NaN gradients during backprop
     valid_mask_exp = valid_mask.unsqueeze(1).unsqueeze(2)  # (B, 1, 1, num_lanes, num_points)
     point_distances = torch.where(
         valid_mask_exp,
         point_distances,
-        torch.tensor(float('inf'), device=device, dtype=dtype)
+        torch.tensor(0.0, device=device, dtype=dtype)
     )
 
     # 对每条车道找最近的点
@@ -89,12 +90,13 @@ def calculate_lane_distance(x, data_batch):
     # 计算距离 (B, N, T, num_lanes, num_points-1)
     segment_distances = torch.norm(vehicle_exp - closest_points, dim=-1)
 
-    # 应用线段有效性mask
+    # 应用线段有效性mask，使用大数而非inf
+    # Using a large finite value instead of inf to avoid NaN gradients during backprop
     seg_valid_exp = seg_valid.unsqueeze(1).unsqueeze(2)  # (B, 1, 1, num_lanes, num_points-1)
     segment_distances = torch.where(
         seg_valid_exp,
         segment_distances,
-        torch.tensor(float('inf'), device=device, dtype=dtype)
+        torch.tensor(0.0, device=device, dtype=dtype)
     )
 
     # 对每条车道找最近的线段
@@ -106,21 +108,6 @@ def calculate_lane_distance(x, data_batch):
 
     # 取所有车道的最小距离
     min_distances, _ = torch.min(min_lane_dist, dim=-1)  # (B, N, T)
+    distances = min_distances.detach()
 
-    # 处理无效的车辆位置（NaN）
-    # Use 0.0 instead of NaN to avoid gradient issues during guidance optimization
-    invalid_vehicles = torch.isnan(vehicle_positions[..., 0]) | torch.isnan(vehicle_positions[..., 1])
-    min_distances = torch.where(
-        invalid_vehicles,
-        torch.tensor(0.0, device=device, dtype=dtype),
-        min_distances
-    )
-
-    # 如果没有找到有效车道，设为0而不是NaN，避免梯度计算中的NaN传播
-    min_distances = torch.where(
-        torch.isinf(min_distances),
-        torch.tensor(0.0, device=device, dtype=dtype),
-        min_distances
-    )
-
-    return min_distances
+    return distances
