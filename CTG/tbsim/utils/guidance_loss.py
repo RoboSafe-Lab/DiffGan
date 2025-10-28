@@ -2437,7 +2437,7 @@ class LearnedRewardGuidance(GuidanceLoss):
                 distances = calculate_lane_distance(x, data_batch)
                 #valid_distances = distances[~torch.isnan(distances)]
                 #print(f"vaild lane distance: {valid_distances.numel()}/{distances.numel()}")
-                feats_out.append(torch.mean(torch.nan_to_num(torch.pow(distances, 2), nan=0.0), dim=-1))
+                feats_out.append(torch.mean(torch.pow(torch.nan_to_num(distances, nan=0.0), 2), dim=-1))
 
             else:
                 raise ValueError(f"Invalid feature name: {name}")
