@@ -498,8 +498,9 @@ class EnvUnifiedSimulation(BaseEnv, BatchedEnv):
                         next_state[:2] = action["positions"][idx, action_index] @ world_from_agent + curr_pos
                         next_state[2] = curr_yaw + action["yaws"][idx, action_index, 0]
                     else:
-                        next_state = np.ones(3, dtype=obs["agent_fut"].dtype)*np.nan
+                        #next_state = np.ones(3, dtype=obs["agent_fut"].dtype)*np.nan
                         print("invalid action!", idx, action_index, action["positions"][idx, action_index], action["yaws"][idx, action_index, 0])
+
                     scene_action[agent.name] = StateArray.from_array(next_state, "x,y,h")
                     idx += 1
                 scene.step(scene_action, return_obs=False)

@@ -366,7 +366,7 @@ def detect_collision(
     """
     from l5kit.planning import utils
     ego_bbox = utils._get_bounding_box(centroid=ego_pos, yaw=ego_yaw, extent=ego_extent)
-    
+
     # within_range_mask = utils.within_range(ego_pos, ego_extent, other_pos, other_extent)
     # TBD: hack to ignore shapely warning when no intersection is found.
     import warnings
