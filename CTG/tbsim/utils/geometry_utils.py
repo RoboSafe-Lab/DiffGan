@@ -365,11 +365,6 @@ def detect_collision(
              collision type and the agent track_id
     """
     from l5kit.planning import utils
-
-    # fix bugs: Check for NaN values in ego agent's state - skip collision detection if invalid
-    if np.any(np.isnan(ego_pos)) or np.isnan(ego_yaw) or np.any(np.isnan(ego_extent)):
-        return None
-
     ego_bbox = utils._get_bounding_box(centroid=ego_pos, yaw=ego_yaw, extent=ego_extent)
 
     # within_range_mask = utils.within_range(ego_pos, ego_extent, other_pos, other_extent)
@@ -377,11 +372,6 @@ def detect_collision(
     import warnings
     warnings.filterwarnings('ignore')
     for i in range(other_pos.shape[0]):
-        # fix bugs: Check for NaN values in other agent's state - skip this agent if invalid
-        if np.any(np.isnan(other_pos[i])) or np.isnan(other_yaw[i]) or np.any(np.isnan(other_extent[i])):
-            print(f"find NaN values in other agent's state, skip")
-            continue
-
         agent_bbox = utils._get_bounding_box(other_pos[i], other_yaw[i], other_extent[i])
         if ego_bbox.intersects(agent_bbox):
             front_side, rear_side, left_side, right_side = utils._get_sides(ego_bbox)
