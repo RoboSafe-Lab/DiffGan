@@ -28,9 +28,9 @@ class AdversarialIRLDiffusionInference:
         self.irl_norm_mean = None
         self.irl_norm_std = None
         self.pkl_dir = f"./MaxEntIRL/irl_output/weights/adversarial_irl_results_{config.scene_location}_{config.wandb_run_name}.pkl"
-        self.location_output_dir = os.path.join(hdf5_dir, config.scene_location)
+        self.location_output_dir = os.path.join(hdf5_dir, config.scene_location, config.wandb_run_name)
         os.makedirs(self.location_output_dir, exist_ok=True)
-        self.hdf5_path = os.path.join(self.location_output_dir, f"{config.scene_location}_{config.wandb_run_name}.hdf5")
+        self.hdf5_path = os.path.join(self.location_output_dir, "data.hdf5")
 
         self.setup_environment()
 
