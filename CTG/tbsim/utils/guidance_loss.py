@@ -18,6 +18,7 @@ from torch.autograd import Variable
 import tbsim.utils.tensor_utils as TensorUtils
 
 from tbsim.utils.lane_distance_loss import calculate_lane_distance
+from tbsim.utils.line_det import detect_line_curve
 
 ### utils for choosing from samples ####
 
@@ -2251,6 +2252,9 @@ class LearnedRewardGuidance(GuidanceLoss):
             left_thw_raw_all = torch.zeros((B, N, T), device=device)
             right_thw_raw_all = torch.zeros((B, N, T), device=device)
 
+        # line & cure divide mask
+        mask = detect_line_curve(x) # (B, N, T)
+
         for name in feature_names:
             if name == "velocity":
                 f = torch.mean(vel, dim=-1) if T > 0 else torch.zeros((B, N), device=device)
@@ -2259,6 +2263,14 @@ class LearnedRewardGuidance(GuidanceLoss):
             elif name == "velocity_p2":
                 f = torch.mean(torch.pow(vel, 2), dim=-1) if T > 0 else torch.zeros((B, N), device=device)
                 feats_out.append(f)
+
+            elif name == "velocity_p2_t":
+                ft, _ = self.split_data_by_mask(torch.pow(vel, 2), mask) if T > 0 else torch.zeros((B, N), device=device)
+                feats_out.append(ft)
+
+            elif name == "velocity_p2_f":
+                _, ff = self.split_data_by_mask(torch.pow(vel, 2), mask) if T > 0 else torch.zeros((B, N), device=device)
+                feats_out.append(ff)
 
             elif name == "a_long":
                 if T > 1:
@@ -2271,6 +2283,22 @@ class LearnedRewardGuidance(GuidanceLoss):
                 if T > 1:
                     a = tdiff(vel) / dt  # (B,N,T-1)
                     feats_out.append(torch.mean(torch.pow(a,2), dim=-1))
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "a_long_p2_t":
+                if T > 1:
+                    a = tdiff(vel) / dt
+                    ft, _ = self.split_data_by_mask(torch.pow(a, 2), mask)
+                    feats_out.append(ft)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "a_long_p2_f":
+                if T > 1:
+                    a = tdiff(vel) / dt
+                    _, ff = self.split_data_by_mask(torch.pow(a, 2), mask)
+                    feats_out.append(ff)
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
@@ -2290,6 +2318,24 @@ class LearnedRewardGuidance(GuidanceLoss):
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
+            elif name == "jerk_long_p2_t":
+                if T > 2:
+                    a = tdiff(vel) / dt              # (B,N,T-1)
+                    j = tdiff(a) / dt                # (B,N,T-2)
+                    ft, _ = self.split_data_by_mask(torch.pow(j, 2), mask)
+                    feats_out.append(ft)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "jerk_long_p2_f":
+                if T > 2:
+                    a = tdiff(vel) / dt              # (B,N,T-1)
+                    j = tdiff(a) / dt                # (B,N,T-2)
+                    _, ff = self.split_data_by_mask(torch.pow(j, 2), mask)
+                    feats_out.append(ff)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
             elif name == "a_lateral":
                 if T > 1:
                     yaw_rate = tdiff(yaw_w) / dt     # (B,N,T-1)
@@ -2305,6 +2351,26 @@ class LearnedRewardGuidance(GuidanceLoss):
                     v_mid = 0.5 * (vel[..., :-1] + vel[..., 1:])  # (B,N,T-1)
                     a_lat = yaw_rate * v_mid
                     feats_out.append(torch.mean(torch.pow(a_lat,2), dim=-1))
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            # elif name == "a_lateral_p2_t":
+            #     if T > 1:
+            #         yaw_rate = tdiff(yaw_w) / dt     # (B,N,T-1)
+            #         v_mid = 0.5 * (vel[..., :-1] + vel[..., 1:])  # (B,N,T-1)
+            #         a_lat = yaw_rate * v_mid
+            #         ft, _ = self.split_data_by_mask(torch.pow(a_lat, 2), mask)
+            #         feats_out.append(ft)
+            #     else:
+            #         feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "a_lateral_p2_f":
+                if T > 1:
+                    yaw_rate = tdiff(yaw_w) / dt     # (B,N,T-1)
+                    v_mid = 0.5 * (vel[..., :-1] + vel[..., 1:])  # (B,N,T-1)
+                    a_lat = yaw_rate * v_mid
+                    _, ff = self.split_data_by_mask(torch.pow(a_lat, 2), mask)
+                    feats_out.append(ff)
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
@@ -2357,6 +2423,22 @@ class LearnedRewardGuidance(GuidanceLoss):
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
+            elif name == "front_thw_p2_t":
+                if T > 0:
+                    front_thw_all = torch.where(front_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), front_thw_raw_all)
+                    ft, _ = self.split_data_by_mask(torch.pow(front_thw_all, 2), mask)
+                    feats_out.append(ft) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "front_thw_p2_f":
+                if T > 0:
+                    front_thw_all = torch.where(front_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), front_thw_raw_all)
+                    _, ff = self.split_data_by_mask(torch.pow(front_thw_all, 2), mask)
+                    feats_out.append(ff) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
             elif name == "front_thw_p2_exp":
                 if T > 0:
                     # Apply exponential decay and handle inf values
@@ -2384,6 +2466,22 @@ class LearnedRewardGuidance(GuidanceLoss):
                     # left_thw_exp = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_exp) # replace inf with 0 after exp decay
                     left_thw_all = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_raw_all)
                     feats_out.append(torch.mean(torch.pow(left_thw_all, 2), dim=-1)) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "left_thw_p2_t":
+                if T > 0:
+                    left_thw_all = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_raw_all)
+                    ft, _ = self.split_data_by_mask(torch.pow(left_thw_all, 2), mask)
+                    feats_out.append(ft) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "front_thw_p2_f":
+                if T > 0:
+                    left_thw_all = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_raw_all)
+                    _, ff = self.split_data_by_mask(torch.pow(left_thw_all, 2), mask)
+                    feats_out.append(ff)  # (B, N)
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
@@ -2417,6 +2515,22 @@ class LearnedRewardGuidance(GuidanceLoss):
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
+            elif name == "right_thw_p2_t":
+                if T > 0:
+                    right_thw_all = torch.where(right_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), right_thw_raw_all)
+                    ft, _ = self.split_data_by_mask(torch.pow(right_thw_all, 2), mask)
+                    feats_out.append(ft) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
+            elif name == "right_thw_p2_f":
+                if T > 0:
+                    right_thw_all = torch.where(right_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), right_thw_raw_all)
+                    _, ff = self.split_data_by_mask(torch.pow(right_thw_all, 2), mask)
+                    feats_out.append(ff) # (B, N)
+                else:
+                    feats_out.append(torch.zeros((B, N), device=device))
+
             elif name == "right_thw_p2_exp":
                 if T > 0:
                     # Apply exponential decay and handle inf values
@@ -2445,6 +2559,25 @@ class LearnedRewardGuidance(GuidanceLoss):
                 raise ValueError(f"Invalid feature name: {name}")
 
         return torch.stack(feats_out, dim=-1)  # (B,N,F)
+
+    def split_data_by_mask(self, data, mask):
+        mask = mask.bool()
+        B, N, data_len = data.shape
+        mask_truncated = mask[:, :, :data_len]
+
+        sum_true = torch.where(mask_truncated, data, torch.zeros_like(data)).sum(dim=-1)  # (B, N)
+        count_true = mask_truncated.sum(dim=-1).float()  # (B, N)
+
+        sum_false = torch.where(~mask_truncated, data, torch.zeros_like(data)).sum(dim=-1)  # (B, N)
+        count_false = (~mask_truncated).sum(dim=-1).float()  # (B, N)
+
+        mean_true = sum_true / torch.where(count_true > 0, count_true, torch.ones_like(count_true))
+        mean_false = sum_false / torch.where(count_false > 0, count_false, torch.ones_like(count_false))
+
+        mean_true = torch.where(count_true > 0, mean_true, torch.zeros_like(mean_true))
+        mean_false = torch.where(count_false > 0, mean_false, torch.zeros_like(mean_false))
+
+        return mean_true, mean_false
 
 ############## GUIDANCE utilities ########################
 

@@ -22,9 +22,8 @@ from tbsim.utils.trajdata_utils import get_closest_lane_point_for_one_agent
 
 from trajdata.maps import VectorMap
 from trajdata.utils import map_utils
-from pathlib import Path
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
+
+from MaxEntIRL.line_det import detect_line_curve
 
 class IRLFeatureExtractor:
     def __init__(self, eval_cfg, config=default_config):
@@ -440,8 +439,8 @@ class IRLFeatureExtractor:
                 # Get centroid data
                 centroids = np.asarray(buffer['centroid'])
                 yaws = np.asarray(buffer['yaw'])
-                # maps = np.asarray(buffer['maps'])
-                # rasters = np.asarray(buffer['raster_from_world'])
+                maps = np.asarray(buffer['maps'])
+                rasters = np.asarray(buffer['raster_from_world'])
                 lanes = np.asarray(buffer['closest_lane_point'])
                     
                 # Create dictionary with agent_id as key for a rollout
@@ -450,8 +449,8 @@ class IRLFeatureExtractor:
                         agents_per_rollout[unique_agent_id] = {
                             'positions': centroids[i],
                             'yaw': yaws[i],
-                            # 'map': maps[i],
-                            # 'raster': rasters[i],
+                            'map': maps[i],
+                            'raster': rasters[i],
                             'lanes': lanes[i],
                         }
 
@@ -918,6 +917,13 @@ class IRLFeatureExtractor:
                 print(f"valid lane distance:{np.sum(~np.isnan(distances))}/{distances.size}")
                 lane_distance_all.append(np.nan_to_num(distances,nan=0))
         
+        # line detect to divide line & cure
+        is_line_all = []
+        st = time.time()
+        for i, aid in enumerate(valid_dynamic_agents):
+            is_line_all.append(detect_line_curve(pos[i], heading_array[i]))
+        print(f"calculate line split mask: {time.time()-st}")
+
         # Step 9: Assemble features for each dynamic agent
         agent_features = {}
         for i, aid in enumerate(valid_dynamic_agents):  # Fix: use valid_dynamic_agents directly
@@ -976,9 +982,34 @@ class IRLFeatureExtractor:
             if 'lane_distance_p2' in feature_names:
                 feats['lane_distance_p2'] = np.power(lane_distance_all[i], 2)
 
+            # divide line & cure mode
+            mask = is_line_all[i]
+
+            if 'velocity_p2_t' in feature_names and speed.shape[1] > 0:
+                feats['velocity_p2_t'], feats['velocity_p2_f'] = self.split_data_by_mask(np.power(speed[i], 2), mask)
+            if 'a_long_p2_t' in feature_names and a_long.shape[1] > 0:
+                feats['a_long_p2_t'], feats['a_long_p2_f'] = self.split_data_by_mask(np.power(a_long[i], 2), mask)
+            if 'jerk_long_p2_t' in feature_names and jerk.shape[1] > 0:
+                feats['jerk_long_p2_t'], feats['jerk_long_p2_f'] = self.split_data_by_mask(np.power(jerk[i], 2), mask)
+            if 'a_lateral_p2_f' in feature_names and a_lat.shape[1] > 0:
+                _, feats['a_lateral_p2_f'] = self.split_data_by_mask(np.power(a_lat[i], 2), mask)
+            if 'front_thw_p2_t' in feature_names and TT > 0:
+                feats['front_thw_p2_t'], feats['front_thw_p2_f'] = self.split_data_by_mask(np.power(front_thw_all[i], 2), mask)
+            if 'left_thw_p2_t' in feature_names and TT > 0:
+                feats['left_thw_p2_t'], feats['left_thw_p2_f'] = self.split_data_by_mask(np.power(left_thw_all[i], 2), mask)
+            if 'right_thw_p2_t' in feature_names and TT > 0:
+                feats['right_thw_p2_t'], feats['right_thw_p2_f'] = self.split_data_by_mask(np.power(right_thw_all[i], 2), mask)
+
             agent_features[aid] = feats
     
         return agent_features
+
+    def split_data_by_mask(self, data, mask):
+        data_len = len(data)
+        mask_truncated = mask[:data_len]
+        data_true = data[mask_truncated]
+        data_false = data[~mask_truncated]
+        return data_true, data_false
 
 
     def is_trajectory_dynamic(self, trajectory):
