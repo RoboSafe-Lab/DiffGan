@@ -2477,7 +2477,7 @@ class LearnedRewardGuidance(GuidanceLoss):
                 else:
                     feats_out.append(torch.zeros((B, N), device=device))
 
-            elif name == "front_thw_p2_f":
+            elif name == "left_thw_p2_f":
                 if T > 0:
                     left_thw_all = torch.where(left_thw_raw_all == float('inf'), torch.tensor(0.0, device=device), left_thw_raw_all)
                     _, ff = self.split_data_by_mask(torch.pow(left_thw_all, 2), mask)
