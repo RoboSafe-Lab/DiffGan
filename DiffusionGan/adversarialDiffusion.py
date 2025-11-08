@@ -96,15 +96,15 @@ class AdversarialIRLDiffusion:
             generated_features = self.generate_trajectories_with_current_model()
             
             # Step 2: Update reward function using MaxEnt IRL (Discriminator)
-            self.current_theta = self.get_reward_via_irl(generated_features)
+            self.current_theta, self.theta_ema = self.get_reward_via_irl(generated_features)
 
-            # Maintain an EMA of theta for smoother guidance
-            beta = self.config.theta_ema_beta
-            if self.current_theta is not None:
-                if self.theta_ema is None:
-                    self.theta_ema = np.array(self.current_theta, dtype=float)
-                else:
-                    self.theta_ema = beta * self.theta_ema + (1.0 - beta) * np.array(self.current_theta, dtype=float)
+            # # Maintain an EMA of theta for smoother guidance
+            # beta = self.config.theta_ema_beta
+            # if self.current_theta is not None:
+            #     if self.theta_ema is None:
+            #         self.theta_ema = np.array(self.current_theta, dtype=float)
+            #     else:
+            #         self.theta_ema = beta * self.theta_ema + (1.0 - beta) * np.array(self.current_theta, dtype=float)
 
             # Step 3: Apply learned reward as guidance
             if iteration < num_iterations - 1:
@@ -113,7 +113,7 @@ class AdversarialIRLDiffusion:
             # Step 4: Evaluate and log progress
             self.evaluate_iteration(generated_features, iteration)
 
-        return self.current_theta, self.irl_norm_mean, self.irl_norm_std
+        return self.current_theta, self.theta_ema, self.irl_norm_mean, self.irl_norm_std
     
     def generate_trajectories_with_current_model(self):
         """Generate trajectories using current diffusion model state"""
@@ -131,8 +131,8 @@ class AdversarialIRLDiffusion:
         
         # Run MaxEnt IRL to learn reward
         features_list = list(generated_features.values())
-        irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations)
-        learned_theta, training_log = irl.fit(features_list)
+        irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations, theta_ema_beta=self.config.theta_ema_beta)
+        learned_theta, theta_ema, training_log = irl.fit(features_list)
         
         # Log IRL training progress to wandb
         if self.config.use_wandb:
@@ -152,8 +152,9 @@ class AdversarialIRLDiffusion:
         self.irl_norm_mean = irl.norm_mean
         self.irl_norm_std = irl.norm_std
         print(f"Learned reward weights: {learned_theta}")
+        print(f"Learned reward weights (ema): {theta_ema}")
         
-        return learned_theta
+        return learned_theta, theta_ema
 
     def update_diffusion_model_with_reward(self):
         """Update diffusion model using learned reward as guidance (Generator step)"""
@@ -252,6 +253,8 @@ class AdversarialIRLDiffusion:
             if self.current_theta is not None:
                 for i, (weight, feature_name) in enumerate(zip(self.current_theta, self.config.feature_names)):
                     wandb_metrics[f"theta/{feature_name}"] = weight
+                for i, (weight, feature_name) in enumerate(zip(self.theta_ema, self.config.feature_names)):
+                    wandb_metrics[f"theta_ema/{feature_name}"] = weight
             wandb.log(wandb_metrics)
             
         # Save checkpoint
@@ -379,7 +382,7 @@ if __name__ == "__main__":
     trainer.setup_environment()
     
     # Run adversarial training
-    final_theta, norm_mean, norm_std = trainer.train_adversarial(num_iterations=default_config.num_iterations)
+    final_theta, theta_ema, norm_mean, norm_std = trainer.train_adversarial(num_iterations=default_config.num_iterations)
     
     print(f"Final learned reward weights: {final_theta}")
 
@@ -391,6 +394,7 @@ if __name__ == "__main__":
     with open(checkpoint_path, "wb") as f:
         pickle.dump({
             "final_theta": final_theta,
+            "theta_ema": theta_ema,
             "norm_mean": norm_mean, 
             "norm_std": norm_std
         }, f)
