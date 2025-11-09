@@ -15,7 +15,6 @@ class MaxEntIRL:
         beta2: float = 0.999,
         eps: float = 1e-8,
         lam: float = 0.01,
-        theta_ema_beta: float = 0.9,
         seed: int = 42,
 
     ):
@@ -29,7 +28,6 @@ class MaxEntIRL:
         self.beta2 = beta2
         self.eps = eps
         self.lam = lam
-        self.theta_ema_beta = theta_ema_beta
 
         self.theta = np.random.RandomState(seed).normal(0, 0.05, size=self.feature_num)
 
@@ -108,7 +106,7 @@ class MaxEntIRL:
     def _traj_reward(self, feat_vec: np.ndarray) -> float:
         return float(np.dot(feat_vec, self.theta))
 
-    def fit(self, features: List[Any]) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    def fit(self, features: List[Any]) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         features is the list loaded from pkl files:
         [
@@ -244,12 +242,8 @@ class MaxEntIRL:
             if (it + 1) % 10 == 0:
                 print(f"Iteration {it + 1}: Log-likelihood = {training_log['average_log-likelihood'][-1]:.4f}")
 
-        # Maintain an EMA of theta for smoother guidance
-        beta = self.theta_ema_beta
-        theta_ema = beta * self.theta + (1.0 - beta) * np.array(theta, dtype=float)
 
-        self.theta = theta_ema
-        return theta, theta_ema, training_log
+        return theta, training_log
 
     @staticmethod
     def save_results(theta: np.ndarray, training_log: Dict[str, Any], path: str = "irl_results.pkl",
