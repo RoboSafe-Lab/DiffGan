@@ -40,6 +40,7 @@ class AdversarialIRLDiffusion:
             "policy_ckpt_key": self.config.policy_ckpt_key,
             "env": self.config.env,
             "eval_class": self.config.eval_class,
+            "lr": self.config.learning_rate,
         }
         
         wandb.init(
