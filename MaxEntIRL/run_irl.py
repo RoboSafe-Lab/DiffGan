@@ -226,6 +226,10 @@ class MaxEntIRL:
             print(f"  Feature diff norm: {np.linalg.norm(human_feature_exp - feature_exp)}")
             print(f"  Learning rate effect: {np.linalg.norm(self.lr * mhat / (np.sqrt(vhat) + self.eps))}")
 
+            print(f"  Grad: {grad}")
+            print(f"  Theta: {theta}")
+            print(f"  Learning rate effect: {self.lr * mhat / (np.sqrt(vhat) + self.eps)}")
+
             # Log
             training_log["iteration"].append(it + 1)
             training_log["average_feature_difference"].append(
