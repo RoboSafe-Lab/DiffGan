@@ -131,7 +131,7 @@ class AdversarialIRLDiffusion:
         
         # Run MaxEnt IRL to learn reward
         features_list = list(generated_features.values())
-        irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations, theta_ema_beta=self.config.theta_ema_beta)
+        irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations, theta_ema_beta=self.config.theta_ema_beta, lr=self.config.learning_rate)
         learned_theta, theta_ema, training_log = irl.fit(features_list)
         
         # Log IRL training progress to wandb
