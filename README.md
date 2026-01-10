@@ -21,7 +21,8 @@ DiffGAN/
 ├── scripts/
 ├── sh/                             # dmog shell
 ├── config/                         # Configs for training and test
-└── checkpoints/                    # Save checkpoints for Generator
+├── train_results/                  # Save checkpoints for Discriminator
+└── checkpoints/                    # Save checkpoints for Generator (CTG)
 ```
 
 ## Getting Started
