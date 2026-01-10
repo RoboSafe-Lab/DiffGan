@@ -74,9 +74,9 @@ We currently support the [nuScenes](https://www.nuscenes.org/nuscenes) dataset.
 * Download the nuScenes dataset (with the v1.3 map extension pack) and organize the dataset directory as follows:
     ```
     nuscenes/
-    │   maps/
-    │   v1.0-mini/
-    │   v1.0-trainval/
+    ├── maps/
+    ├── v1.0-mini/
+    └── v1.0-trainval/
     ```
 ### Before training
 * Before training DiffGAN, you need to follow [this](CTG/README.md) to train a diffuser model.
