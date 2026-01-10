@@ -1,6 +1,8 @@
 """A script for evaluating closed-loop simulation"""
 import argparse
 from symbol import star_expr
+
+import h5py
 import numpy as np
 import json
 import random
@@ -346,16 +348,25 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
 
 
 def dump_episode_buffer(buffer, scene_index, start_frames, h5_path):
-    import h5py
+    # All info can be logged:
+    # "centroid", "yaw", "curr_speed", "extent", "world_from_agent", "scene_index",
+    # "track_id", "drivable_map", "raster_from_world", "map_names",  "agent_name",
+    # "maps", "scene_ids", "closest_lane_point", 'action_positions', 'action_yaws',
+    # 'action_traj_positions', 'action_traj_yaws', 'action_sample_positions', 'action_sample_yaws'
+
+    log_infos = ['curr_speed', 'yaw', 'centroid', 'extent', 'raster_from_world',
+                 'drivable_map', 'action_sample_positions', 'agent_name']
+
     h5_file = h5py.File(h5_path, "a")
 
     for ei, si, scene_buffer in zip(start_frames, scene_index, buffer):
         for mk in scene_buffer:
+            if mk not in log_infos:
+                continue
             h5key = "/{}_{}/{}".format(si, ei, mk)
             h5_file.create_dataset(h5key, data=scene_buffer[mk])
     h5_file.close()
     print("scene {} written to {}".format(scene_index, h5_path))
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -17,7 +17,7 @@ from tbsim.utils.trajdata_utils import get_current_lane_projection, get_left_lan
 from torch.autograd import Variable
 import tbsim.utils.tensor_utils as TensorUtils
 
-from tbsim.utils.lane_distance_loss import calculate_lane_distance
+from tbsim.utils.loss_utils import calculate_lane_distance
 from tbsim.utils.line_det import detect_line_curve
 
 ### utils for choosing from samples ####

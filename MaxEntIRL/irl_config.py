@@ -8,20 +8,31 @@ class FeatureExtractionConfig:
     """Configuration for IRL feature extraction"""
     
     # Model and environment - Match the working scene_editor.py format
-    policy_ckpt_dir: str = "./CTG/diffuser_trained_models/test/run0"  # Relative path like scene_editor
+    policy_ckpt_dir: str = "./checkpoints/diffuser_trained_models"  # Relative path like scene_editor
     policy_ckpt_key: str = "iter100000.ckpt"        # Full path with checkpoints/ prefix
     
     # Output settings
-    output_dir: str = "./MaxEntIRL/irl_output"
+    output_dir: str = "./train_results"
     save_features: bool = False  # Whether to save extracted features
 
-    # feature names
+    # feature names   t->line f->cure
     feature_names: List[str] = field(default_factory=lambda: 
-        ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'front_thw', 'left_thw', 'right_thw'])
-    
+        ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'front_thw', 'left_thw', 'right_thw', 'lane_distance'])
+
+    # Continue train
+    continue_id: int = None
+
+    # test feature names(for inference, just apply these features) None = test all
+    test_feature_names: List[str] = field(default_factory=lambda:
+        ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'front_thw', 'left_thw', 'right_thw', 'lane_distance'])
+
+    # output pkl file label
+    pkl_label: str = None
+
     # Scene selection
-    scene_location: str = "singapore" # Options: 'boston', 'singapore'
-    num_scenes_to_evaluate: int = 10
+    scene_location: str = "boston" # Options: 'boston', 'singapore'
+    num_scenes_to_evaluate: int = 10 # For training
+    num_scenes_to_infer: int = 150 # For inference
     
     eval_scenes: List[int] = field(default_factory=list)
     num_scenes_per_batch: int = 1
@@ -63,6 +74,7 @@ class FeatureExtractionConfig:
     num_iterations: int = 100
     theta_ema_beta: float = 0.9
     guidance_weight: float = 1.0
+    learning_rate: float = 0.0001
     
     checkpoint_frequency: int = 20  # Save every N iterations
     

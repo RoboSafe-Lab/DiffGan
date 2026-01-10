@@ -4,7 +4,7 @@ import pickle
 import os
 import wandb
 from MaxEntIRL.extract_features import IRLFeatureExtractor
-from MaxEntIRL.run_irl import MaxEntIRL
+from MaxEntIRL.maxEntIRL import MaxEntIRL
 from tbsim.configs.scene_edit_config import SceneEditingConfig
 from MaxEntIRL.irl_config import default_config
 
@@ -82,6 +82,22 @@ class AdversarialIRLDiffusion:
         self.env = self.extractor.env
         self.policy = self.extractor.policy
         self.policy_model = self.extractor.policy_model
+
+        # Continue train
+        if self.config.continue_id:
+            weights_dir = os.path.join(self.config.output_dir, "weights")
+            checkpoint_path = os.path.join(weights_dir,
+                                           f"weights_{self.config.scene_location}_{self.config.pkl_label}_{self.config.continue_id-1}.pkl")
+            if os.path.exists(checkpoint_path):
+                with open(checkpoint_path, 'rb') as f:
+                    data = pickle.load(f)
+                    self.theta_ema = data['theta_ema']
+                    self.theta = data['final_theta']
+                    self.update_diffusion_model_with_reward()
+                    print("Continue training from:", self.config.continue_id-1)
+            else:
+                raise FileNotFoundError(checkpoint_path)
+
         print("Environment and models setup complete")
     
     def train_adversarial(self, num_iterations=100):
@@ -90,7 +106,11 @@ class AdversarialIRLDiffusion:
         Generator (Diffusion): Tries to generate realistic trajectories
         Discriminator (MaxEnt IRL): Tries to distinguish real vs generated trajectories
         """
-        for iteration in range(num_iterations):
+        if self.config.continue_id:
+            iter_start = self.config.continue_id
+        else:
+            iter_start = 0
+        for iteration in range(iter_start, num_iterations):
             print(f"\n=== Adversarial Training Iteration {iteration + 1}/{num_iterations} ===")
             
             # Step 1: Generate trajectories using current diffusion model (Generator)
@@ -132,7 +152,10 @@ class AdversarialIRLDiffusion:
         
         # Run MaxEnt IRL to learn reward
         features_list = list(generated_features.values())
-        irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations, lr=self.config.learning_rate)
+
+        irl = MaxEntIRL(feature_names=self.config.feature_names, n_iters=self.config.num_iterations,
+                            lr=self.config.learning_rate)
+
         learned_theta, training_log = irl.fit(features_list)
         
         # Log IRL training progress to wandb
@@ -358,6 +381,7 @@ class AdversarialIRLDiffusion:
         """Save training checkpoint"""
         # if iteration == self.config.num_iterations - 1:
         checkpoint = {
+            "features": self.config.feature_names,
             "final_theta": self.current_theta,
             "theta_ema": self.theta_ema,
             "norm_mean": self.irl_norm_mean,
@@ -368,7 +392,7 @@ class AdversarialIRLDiffusion:
         weights_dir = os.path.join(self.config.output_dir, "weights")
         os.makedirs(weights_dir, exist_ok=True)
 
-        checkpoint_path = os.path.join(weights_dir, f"weights_{self.config.scene_location}_{self.config.wandb_run_name}_{iteration}.pkl")
+        checkpoint_path = os.path.join(weights_dir, f"weights_{self.config.scene_location}_{self.config.pkl_label}_{iteration}.pkl")
         with open(checkpoint_path, 'wb') as f:
             pickle.dump(checkpoint, f)
 
@@ -390,11 +414,12 @@ if __name__ == "__main__":
 
     weights_dir = os.path.join(trainer.config.output_dir, "weights")
     os.makedirs(weights_dir, exist_ok=True)
-    checkpoint_path = os.path.join(weights_dir, f"adversarial_irl_results_{trainer.config.scene_location}_{trainer.config.wandb_run_name}.pkl")
+    checkpoint_path = os.path.join(weights_dir, f"adversarial_irl_results_{trainer.config.scene_location}_{trainer.config.pkl_label}.pkl")
     
     # Save final results
     with open(checkpoint_path, "wb") as f:
         pickle.dump({
+            "features": default_config.feature_names,
             "final_theta": final_theta,
             "theta_ema": theta_ema,
             "norm_mean": norm_mean, 

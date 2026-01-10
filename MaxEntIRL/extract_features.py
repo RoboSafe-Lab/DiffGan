@@ -16,14 +16,12 @@ from tbsim.utils.batch_utils import set_global_batch_type
 from tbsim.utils.trajdata_utils import set_global_trajdata_batch_env, set_global_trajdata_batch_raster_cfg
 from tbsim.utils.scene_edit_utils import guided_rollout, compute_heuristic_guidance, merge_guidance_configs
 import tbsim.utils.tensor_utils as TensorUtils
-
-from MaxEntIRL.lane_distance_loss import calculate_lane_distance
 from tbsim.utils.trajdata_utils import get_closest_lane_point_for_one_agent
 
 from trajdata.maps import VectorMap
 from trajdata.utils import map_utils
 
-from MaxEntIRL.line_det import detect_line_curve
+from MaxEntIRL.loss_utils import calculate_lane_distance, detect_line_curve
 
 class IRLFeatureExtractor:
     def __init__(self, eval_cfg, config=default_config):

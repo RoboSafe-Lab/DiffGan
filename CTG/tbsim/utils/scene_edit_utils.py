@@ -1626,10 +1626,10 @@ def scene_to_video(rasterizer, scene_data, scene_name, output_dir,
         if first_frame_only:
             ffn = os.path.join(output_dir, "{sname}_{simnum:04d}_{framei:03d}.png").format(sname=scene_name, simnum=sim_num, framei=frame_i)
         else:
-            video_dir = os.path.join(output_dir, scene_name + '_%04d' % (sim_num))
+            video_dir = os.path.join(output_dir, f"{scene_name}_{sim_num:04d}")
             if not os.path.exists(video_dir):
                 os.makedirs(video_dir)
-            ffn = os.path.join(video_dir, "{:03d}.png").format(i)
+            ffn = os.path.join(video_dir, f"{i:03d}.png")
         plt.savefig(ffn, dpi=200, bbox_inches="tight", pad_inches=0)
         print("Figure written to {}".format(ffn))
         fig.clf()

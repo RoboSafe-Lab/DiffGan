@@ -121,6 +121,19 @@ class SceneEditingConfig(EvaluationConfig):
             self.trajdata.n_step_action = 5
             self.trajdata.num_simulation_steps = 100
             self.trajdata.skip_first_n = 0
+        ## nuplan
+        elif 'nuplan' in registered_name:
+            self.trajdata.trajdata_source_test = ["nuplan_mini"]
+            self.trajdata.trajdata_cache_location = "~/.unified_data_cache"
+            self.trajdata.trajdata_data_dirs = {
+                "nuplan_mini" : "../behavior-generation-dataset/nuplan",
+            }
+
+            self.trajdata.num_scenes_to_evaluate = 100 # 1 # 100 # 1 # 7 # 2 # 100 # 1
+            self.trajdata.eval_scenes = np.arange(100).tolist() # [68] # np.arange(100).tolist() # [68] # [44] # [88] # [3] # [10] # [2] # [10] # [99] # [7] # [56] # [40] # [1] # [89] # [27] # [31, 32] # np.arange(100).tolist() # [63] # [30]
+            self.trajdata.n_step_action = 5
+            self.trajdata.num_simulation_steps = 100
+            self.trajdata.skip_first_n = 0
         else:
             print('-'*20)
             print('not supported registered_name: '+registered_name)

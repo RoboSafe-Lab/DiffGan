@@ -3,12 +3,12 @@ import os
 import pickle
 from typing import Optional
 
+import h5py
 import numpy as np
 import torch
 
 from MaxEntIRL.extract_features import IRLFeatureExtractor
 from MaxEntIRL.irl_config import default_config
-from scripts.scene_editor import dump_episode_buffer
 from tbsim.configs.scene_edit_config import SceneEditingConfig
 from tbsim.policies.wrappers import RolloutWrapper
 from tbsim.utils.scene_edit_utils import guided_rollout, compute_heuristic_guidance, merge_guidance_configs
@@ -27,8 +27,8 @@ class AdversarialIRLDiffusionInference:
         self.theta_ema = None  # EMA of theta for stability
         self.irl_norm_mean = None
         self.irl_norm_std = None
-        self.pkl_dir = f"./MaxEntIRL/irl_output/weights/adversarial_irl_results_{config.scene_location}_{config.wandb_run_name}.pkl"
-        self.location_output_dir = os.path.join(hdf5_dir, config.scene_location, config.wandb_run_name)
+        self.pkl_dir = f"./{config.output_dir}/weights/adversarial_irl_results_{config.scene_location}_{config.pkl_label}.pkl"
+        self.location_output_dir = os.path.join(hdf5_dir, config.scene_location, config.pkl_label)
         os.makedirs(self.location_output_dir, exist_ok=True)
         self.hdf5_path = os.path.join(self.location_output_dir, "data.hdf5")
 
@@ -422,7 +422,7 @@ class AdversarialIRLDiffusionInference:
                             )
                     
                     if "buffer" in info:
-                        dump_episode_buffer(
+                        self.dump_episode_buffer(
                             info["buffer"],
                             info["scene_index"],
                             [start_frame],
@@ -432,6 +432,29 @@ class AdversarialIRLDiffusionInference:
             torch.cuda.empty_cache()
         
         return result_stats
+
+
+    def dump_episode_buffer(self, buffer, scene_index, start_frames, h5_path):
+        # All info can be logged:
+        # "centroid", "yaw", "curr_speed", "extent", "world_from_agent", "scene_index",
+        # "track_id", "drivable_map", "raster_from_world", "map_names",  "agent_name",
+        # "maps", "scene_ids", "closest_lane_point", 'action_positions', 'action_yaws',
+        # 'action_traj_positions', 'action_traj_yaws', 'action_sample_positions', 'action_sample_yaws'
+
+        log_infos = ['curr_speed','yaw','centroid','extent','raster_from_world',
+                     'drivable_map','action_sample_positions','agent_name']
+
+        h5_file = h5py.File(h5_path, "a")
+
+        for ei, si, scene_buffer in zip(start_frames, scene_index, buffer):
+            for mk in scene_buffer:
+                if mk not in log_infos:
+                    continue
+                h5key = "/{}_{}/{}".format(si, ei, mk)
+                h5_file.create_dataset(h5key, data=scene_buffer[mk])
+        h5_file.close()
+        print("scene {} written to {}".format(scene_index, h5_path))
+
 
     def inference_adversarial(self, render_to_video=True, render_to_img=False):
         """
@@ -463,7 +486,7 @@ class AdversarialIRLDiffusionInference:
 if __name__ == "__main__":
     
     # check if output folder exists
-    output_dir = "./DiffusionGan/results"
+    output_dir = "./infer_results"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 

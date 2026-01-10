@@ -1,69 +1,36 @@
-# CTGTest
-
-## Overview
-
-This repository contains implementations for trajectory generation and reward learning using deep learning approaches.
-
-### Components
-
-- **MaxEntIRL**: Maximum Entropy Inverse Reinforcement Learning implementation for inferring reward feature weights using linear combinations of features
-- **DiffusionGan**: Diffusion Model-based trajectory generation system that creates candidate trajectories for MaxEntIRL, with the inferred rewards used to guide the diffusion process
-
-## Project Structure
-
-```
-CTGTest/
-├── MaxEntIRL/          # Maximum Entropy IRL implementation
-├── DiffusionGan/       # Diffusion-based trajectory generation
-├── tbsim/              # Core simulation and model framework
-│   ├── algos/          # Algorithm implementations
-│   ├── configs/        # Configuration files
-│   └── models/         # Model definitions
-└── CTG/                # Additional components
-```
-
-## Adding New Models
-
-Follow these steps to integrate a new model into the framework:
-
-### Step 1: Algorithm Implementation
-Add your algorithm implementation:
+# DiffGAN
+## Installation
+### Basic (mainly based on tbsim)
+Create conda environment
 ```bash
-tbsim/algos/algo.py
+conda create -n bg3.9 python=3.9
+conda activate bg3.9
 ```
-
-### Step 2: Register Algorithm Factory
-Update the algorithm factory:
+Install `CTG (tbsim)`
 ```bash
-tbsim/algos/factory.py
+cd CTG
+pip install -e . --config-settings editable_mode=compat
 ```
-
-### Step 3: Configuration Setup
-Define algorithm configuration:
+Install a customized version of `trajdata`
 ```bash
-tbsim/configs/algo_config.py
+cd ..
+git clone https://github.com/AIasd/trajdata.git
+cd trajdata
+pip install -r trajdata_requirements.txt
+pip install -e . --config-settings editable_mode=compat
 ```
-
-### Step 4: Registry Registration
-Add to the configuration registry:
+Install `Pplan`
 ```bash
-tbsim/configs/registry.py
+cd ..
+git clone https://github.com/NVlabs/spline-planner.git Pplan
+cd Pplan
+pip install -e . --config-settings editable_mode=compat
 ```
-
-### Step 5: Model Definition
-Implement your model:
+One might need to run the following:
 ```bash
-tbsim/models/your_model.py
+pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0 torchmetrics==0.11.1 torchtext --extra-index-url https://download.pytorch.org/whl/cu113
 ```
-
-## Getting Started
-
-[Add installation and usage instructions here]
-
-## Contributing
-
-[Add contribution guidelines here]
-
-## License
-
-[Add license information here]
+Install ffmpeg:
+```bash
+wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+```
