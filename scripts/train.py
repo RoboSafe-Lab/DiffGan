@@ -44,7 +44,9 @@ def load_config_from_json(json_path: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str)
+    CURRENT_DIR = Path(__file__).resolve().parent
+
+    parser.add_argument("--config", type=str,default=f"{CURRENT_DIR}/../config/MaxEntIRL.json")
     args = parser.parse_args()
 
     if args.config is not None:

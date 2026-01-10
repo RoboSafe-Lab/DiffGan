@@ -14,11 +14,11 @@ export PYTHONUNBUFFERED=1
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate bg3.9
 
-export PYTHONPATH=$HOME/CTGTest/CTG/
+export PYTHONPATH=$HOME/DiffGAN/CTG/
 
 # Define parameter combinations
 
-export WANDB_APIKEY=fca5ee0f0b5f26a561e73544b04d48a96daa94b4
+export WANDB_APIKEY=YOUR_APILEY
 # Run the appropriate command based on SLURM_ARRAY_TASK_ID
-python ~/CTGTest/CTG/scripts/train.py --dataset_path ../behavior-generation-dataset/nuscenes --config_name trajdata_nusc_strive --remove_exp_dir
+python ~/DIffGAN/CTG/scripts/train.py --dataset_path ../behavior-generation-dataset/nuscenes --config_name trajdata_nusc_diff --remove_exp_dir
 

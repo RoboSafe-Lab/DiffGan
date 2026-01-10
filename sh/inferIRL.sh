@@ -12,13 +12,13 @@
 export PYTHONUNBUFFERED=1
 
 source ~/anaconda3/etc/profile.d/conda.sh
-conda activate dg39
+conda activate bg3.9
 
 # Change to the project directory
 cd $HOME/DiffGAN
 
-# Add ffmpeg directly to PATH (no bin subdirectory)
-export PATH=$HOME/CTGTest/ffmpeg-7.0.2-amd64-static:$PATH
+# Add ffmpeg directly to PATH
+export PATH=$HOME/DiffGAN/ffmpeg-7.0.2-amd64-static:$PATH
 
 # Set PYTHONPATH to include both CTG and the current directory
 export PYTHONPATH=$HOME/DiffGAN/CTG/:$HOME/DiffGAN:$PYTHONPATH

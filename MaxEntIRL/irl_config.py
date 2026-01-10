@@ -17,14 +17,13 @@ class FeatureExtractionConfig:
 
     # feature names   t->line f->cure
     feature_names: List[str] = field(default_factory=lambda: 
-        ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'front_thw', 'left_thw', 'right_thw', 'lane_distance'])
+        ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'front_thw', 'left_thw', 'right_thw'])
 
     # Continue train
     continue_id: int = None
 
     # test feature names(for inference, just apply these features) None = test all
-    test_feature_names: List[str] = field(default_factory=lambda:
-        ['velocity', 'a_long', 'jerk_long', 'a_lateral', 'front_thw', 'left_thw', 'right_thw', 'lane_distance'])
+    test_feature_names: List[str] = None
 
     # output pkl file label
     pkl_label: str = None
@@ -81,7 +80,7 @@ class FeatureExtractionConfig:
     # Wandb configuration
     use_wandb: bool = True
     wandb_project: str = "adversarial-irl-diffusion"
-    wandb_entity: str = "chengwang2015"  # Your wandb username/team
+    wandb_entity: str = "YOUR_USER_NAME"  # Your wandb username/team
     wandb_run_name: str = None  # Will be auto-generated if None
     wandb_tags: List[str] = field(default_factory=lambda: ["adversarial", "irl", "diffusion"])
 

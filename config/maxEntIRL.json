@@ -1,12 +1,12 @@
 {
+  "policy_ckpt_dir": "./checkpoints/diffuser_trained_models",
+  "policy_ckpt_key": "iter100000.ckpt",
   "feature_names":
         ["velocity_p2_t", "a_long_p2_t", "jerk_long_p2_t",                   "front_thw_p2_t", "left_thw_p2_t", "right_thw_p2_t",
          "velocity_p2_f", "a_long_p2_f", "jerk_long_p2_f", "a_lateral_p2_f", "front_thw_p2_f", "left_thw_p2_f", "right_thw_p2_f"],
   "continue_id": null,
 
-  "test_feature_names":
-          null,
-  "pkl_label": "T2",
+  "pkl_label": "basic",
   "scene_location": "boston",
   "num_scenes_to_evaluate": 10,
   "num_scenes_to_infer": 100,

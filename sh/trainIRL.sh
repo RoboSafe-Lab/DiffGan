@@ -12,7 +12,7 @@
 export PYTHONUNBUFFERED=1
 
 source ~/anaconda3/etc/profile.d/conda.sh
-conda activate dg39
+conda activate bg3.9
 
 # Change to the project directory
 cd $HOME/DiffGAN
@@ -22,7 +22,7 @@ export PYTHONPATH=$HOME/DiffGAN/CTG/:$HOME/DiffGAN:$PYTHONPATH
 
 # Define parameter combinations
 
-export WANDB_APIKEY=fca5ee0f0b5f26a561e73544b04d48a96daa94b4
-# Run the appropriate command based on SLURM_ARRAY_TASK_ID
+export WANDB_APIKEY=YOUR_API_KEY
+# Run the appropriate command
 python -m scripts.train --config=config/maxEntIRL.json
 
