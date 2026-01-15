@@ -1,6 +1,6 @@
 <div align="center">
   <h1>DiffGAN</h1>
-  <h2>GAN-Inspired Trajectory Generation by Inverse Reinforcement Learning-Informed Diffusion</h2>
+  <h3>GAN-Inspired Trajectory Generation by Inverse Reinforcement Learning-Informed Diffusion</h3>
 </div>
 
 ## Table of Contents
@@ -132,13 +132,13 @@ python CTG/scripts/train.py --dataset_path <path-to-dataset> --config_name trajd
 ```
 After that, you will find the trained weights in `diffuser_trained_models/`. Please move this folder to `checkpoints/` directory.
 
-### Train DiffGan
-Before start training, ensure that you get the checkpoint of diffusion model and put it in the correct place. Please check `config/MaxEntIRL.json` to match `policy_ckpt_dir` and `policy_ckpt_key`
+### Training
+Before start training, ensure that you get the checkpoint of diffusion model and put it in the correct place. Please check `policy_ckpt_dir` and `policy_ckpt_key` in `config/MaxEntIRL.json`. 
 ```bash
 python -m scripts.train --config=config/MaxEntIRL.json
 ```
 
-### Inference DiffGan
+### Closed-loop Evaluation
 ```bash
 python -m scripts.infer --config=config/MaxEntIRL.json
 ```
