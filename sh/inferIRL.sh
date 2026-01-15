@@ -15,13 +15,13 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate bg3.9
 
 # Change to the project directory
-cd $HOME/DiffGAN
+cd $HOME/DiffGan
 
 # Add ffmpeg directly to PATH
-export PATH=$HOME/DiffGAN/ffmpeg-7.0.2-amd64-static:$PATH
+export PATH=$HOME/DiffGan/ffmpeg-7.0.2-amd64-static:$PATH
 
 # Set PYTHONPATH to include both CTG and the current directory
-export PYTHONPATH=$HOME/DiffGAN/CTG/:$HOME/DiffGAN:$PYTHONPATH
+export PYTHONPATH=$HOME/DiffGan/CTG/:$HOME/DiffGan:$PYTHONPATH
 
 
 # Run the appropriate command based on SLURM_ARRAY_TASK_ID
