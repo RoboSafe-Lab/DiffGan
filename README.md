@@ -25,7 +25,7 @@ DiffGAN is a novel generative adversarial diffusion framework that combines diff
 </a>
 
 ## Simulation Results
-<details>
+<details open>
   <summary><strong>Simulation on nuScenes-Boston</strong></summary>
   <br>
   <p align="center">
@@ -40,7 +40,7 @@ DiffGAN is a novel generative adversarial diffusion framework that combines diff
   </a>
   </p>
 </details>
-<details>
+<details open>
   <summary><strong>Simulation on nuScenes-Singapore</strong></summary>
   <br>
   <p align="center">
