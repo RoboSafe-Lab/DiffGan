@@ -133,7 +133,7 @@ python CTG/scripts/train.py --dataset_path <path-to-dataset> --config_name trajd
 After that, you will find the trained weights in `diffuser_trained_models/`. Please move this folder to `checkpoints/` directory.
 
 ### Train DiffGan
-Before start training, ensure that you get the checkpoint of Diffusion Model and put it in the correct place. Fix `config/MaxEntIRL.json` to match `policy_ckpt_dir` and `policy_ckpt_key`
+Before start training, ensure that you get the checkpoint of diffusion model and put it in the correct place. Please check `config/MaxEntIRL.json` to match `policy_ckpt_dir` and `policy_ckpt_key`
 ```bash
 python -m scripts.train --config=config/MaxEntIRL.json
 ```
