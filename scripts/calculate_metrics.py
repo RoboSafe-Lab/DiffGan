@@ -265,29 +265,40 @@ def check_collision(pos_i, pos_j, yaw_i, yaw_j, extent_i, extent_j):
     return polygons_intersect(corners_i, corners_j)
 
 
-def calculate_ttc(pos_i, vel_i, pos_j, vel_j):
-    dx = pos_i[0] - pos_j[0]
-    dy = pos_i[1] - pos_j[1]
-    dvx = vel_i[0] - vel_j[0]
-    dvy = vel_i[1] - vel_j[1]
+def calculate_ttc(pos_i, vel_i, pos_j, vel_j,
+                            heading_i, heading_j,
+                            angle_threshold=30.0,
+                            lateral_threshold=2.0,
+                            min_speed_diff=0.1):
 
-    dv_squared = dvx ** 2 + dvy ** 2
+    heading_diff = np.abs(heading_i - heading_j)
+    heading_diff = np.min([heading_diff, 2 * np.pi - heading_diff])
+    heading_diff_deg = np.degrees(heading_diff)
 
-    if dv_squared < 1e-6:
-        return float('inf'), np.sqrt(dx ** 2 + dy ** 2)
+    if heading_diff_deg > angle_threshold:
+        return np.inf
 
-    dot_product = dvx * dx + dvy * dy
-    t_col_tilde = -dot_product / dv_squared
+    relative_pos = pos_j - pos_i
+    direction_i = np.array([np.cos(heading_i), np.sin(heading_i)])
+    longitudinal_distance = np.dot(relative_pos, direction_i)
+    lateral_vector = relative_pos - longitudinal_distance * direction_i
+    lateral_distance = np.linalg.norm(lateral_vector)
 
-    if t_col_tilde >= 0:
-        cross_product = dvx * dy - dvy * dx
-        d_col_squared = (cross_product ** 2) / dv_squared
-        d_col_tilde = np.sqrt(d_col_squared)
-        return t_col_tilde, d_col_tilde
-    else:
-        current_distance = np.sqrt(dx ** 2 + dy ** 2)
-        return 0, current_distance
+    if lateral_distance > lateral_threshold:
+        return np.inf
 
+    if longitudinal_distance <= 0:
+        return np.inf
+
+    longitudinal_speed_i = np.dot(vel_i, direction_i)
+    longitudinal_speed_j = np.dot(vel_j, direction_i)
+    relative_speed = longitudinal_speed_i - longitudinal_speed_j
+
+    if relative_speed < min_speed_diff:
+        return np.inf
+
+    ttc = longitudinal_distance / relative_speed
+    return ttc
 
 def calculate_lon_dmin(v_rear, v_front, params):
     rho, a_max_accel, a_min_brake, a_max_brake = params['rho'], params['a_max_accel'], params['a_min_brake'], params[
@@ -528,7 +539,7 @@ def main(args):
 
             # init metrics
             scene_metrics = {
-                'min_ttc': float('inf'),
+                'min_ttc': [],
                 'rss_lon': 0,
                 'rss_lat': 0,
                 'fdd_list': [],
@@ -559,6 +570,33 @@ def main(args):
                         if g_j is not None and len(g_j) > 0:
                             jsd_scene_data[base_scene_name]['gt_jerk'].append(g_j)
                             jsd_scene_data[base_scene_name]['sim_jerk'].append(s_j)
+
+            ### min-ttc
+            for idx_i, agent_i in enumerate(active_agent_indices):
+                agent_min_ttc = float('inf')
+                vel_i = np.diff(sim_pos[agent_i, :], axis=0) / dt
+                vel_i = np.vstack([vel_i[0:1], vel_i])
+                if not is_trajectory_dynamic({"speeds": vel_i,"positions": sim_pos[agent_i, :]}):
+                    continue
+                for idx_j, agent_j in enumerate(active_agent_indices):
+                    vel_j = np.diff(sim_pos[agent_j, :], axis=0) / dt
+                    vel_j = np.vstack([vel_j[0:1], vel_j])
+                    if not is_trajectory_dynamic({"speeds": vel_j,"positions": sim_pos[agent_j, :]}):
+                        continue
+                    if idx_i == idx_j:
+                        continue
+                    for t in range(num_timesteps):
+
+                        pos_i = sim_pos[agent_i, t]
+                        pos_j = sim_pos[agent_j, t]
+                        heading_i = sim_yaw[agent_i, t]
+                        heading_j = sim_yaw[agent_j, t]
+                        ttc = calculate_ttc(pos_i, vel_i[t], pos_j, vel_j[t], heading_i, heading_j)
+                        if 0 < ttc < agent_min_ttc:
+                            agent_min_ttc = ttc
+
+                if agent_min_ttc != float('inf'):
+                    scene_metrics['min_ttc'].append(agent_min_ttc)
 
             # traverse timestep
             for t in range(num_timesteps):
@@ -617,13 +655,6 @@ def main(args):
                             if check_collision(pos_i, pos_j, yaw_i, yaw_j, extent_i, extent_j):
                                 scene_metrics['collision_counts'] += 1
 
-                        if 'ttc' in args.metrics:
-                            ### calculate TTC ###
-                            if scene_metrics['collision_counts'] == 0:
-                                ttc, d_col = calculate_ttc(pos_i, vel_i, pos_j, vel_j)
-                                if 0 < ttc < scene_metrics['min_ttc']:
-                                    scene_metrics['min_ttc'] = ttc
-
                         if 'rss' in args.metrics:
                             ### calculate RSS ###
                             lon_viol_i, lat_viol_i = check_rss_pair(pos_i, yaw_i, vel_i, extent_i,
@@ -636,8 +667,8 @@ def main(args):
                             scene_metrics['rss_lon'] += lon_viol_j
                             scene_metrics['rss_lat'] += lat_viol_j
 
-                if scene_metrics['collision_counts'] > 0:
-                    scene_metrics['min_ttc'] = 0
+
+
 
             # Calculate rates based on active agents count
             num_active_agents = len(active_agent_indices)
@@ -646,7 +677,7 @@ def main(args):
                 'scene_name': base_scene_name,
                 'num_agents': num_agents,
                 'num_dynamic_agents': num_active_agents,
-                'min_ttc': scene_metrics['min_ttc'] if scene_metrics['min_ttc'] != float('inf') else np.nan,
+                'min_ttc': np.min(scene_metrics['min_ttc']) if scene_metrics['min_ttc'] else 0,
                 'off-road_rate': scene_metrics['off-road_counts'] / (
                             num_timesteps * num_active_agents) if num_active_agents > 0 else 0,
                 'collision_rate': scene_metrics['collision_counts'] / (
