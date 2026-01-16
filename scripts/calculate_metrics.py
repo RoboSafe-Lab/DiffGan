@@ -694,6 +694,28 @@ def main(args):
             np.save(jsd_save_path, jsd_scene_data)
             print(f"JSD scene-wise data saved to: {jsd_save_path}")
 
+            agg_data = {
+                'gt_vel': [], 'sim_vel': [],
+                'gt_acc': [], 'sim_acc': [],
+                'gt_jerk': [], 'sim_jerk': []
+            }
+            for scene_name in jsd_scene_data:
+                for key in agg_data:
+                    if key in jsd_scene_data[scene_name]:
+                        agg_data[key].extend(jsd_scene_data[scene_name][key])
+
+            gt_v = np.concatenate(agg_data['gt_vel'])
+            sim_v = np.concatenate(agg_data['sim_vel'])
+            gt_a = np.concatenate(agg_data['gt_acc'])
+            sim_a = np.concatenate(agg_data['sim_acc'])
+            gt_j = np.concatenate(agg_data['gt_jerk'])
+            sim_j = np.concatenate(agg_data['sim_jerk'])
+
+            jsd_vel = calculate_jsd_kde(gt_v, sim_v)
+            jsd_acc = calculate_jsd_kde(gt_a, sim_a)
+            jsd_jerk = calculate_jsd_kde(gt_j, sim_j)
+            print(f"JSD results:\n\tjsd vel: {jsd_vel}\n\tjsd acc: {jsd_acc}\n\tjsd jerk: {jsd_jerk}")
+
     if results_list:
         results_df = pd.DataFrame(results_list)
         results_df.to_csv(f'{args.output_dir}/results.csv', index=False)
