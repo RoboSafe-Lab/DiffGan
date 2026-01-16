@@ -126,26 +126,30 @@ We currently support the [nuScenes](https://www.nuscenes.org/nuscenes) dataset.
     ```
     
 ### Train Diffusion Model    
-follow [this](CTG/README.md) to train the diffuser model:
+Follow [this](CTG/README.md#2-train-a-diffuser-model) to train the diffuser model:
 ```bash
 python CTG/scripts/train.py --dataset_path <path-to-dataset> --config_name trajdata_nusc_diff --debug
 ```
 After that, you will find the trained weights in `diffuser_trained_models/`. Please move this folder to `checkpoints/` directory.
 
 ### Training
-Before start training, ensure that you get the checkpoint of diffusion model and put it in the correct place. Please check `policy_ckpt_dir` and `policy_ckpt_key` in `config/MaxEntIRL.json`. 
+Before start training, ensure that you get the checkpoint of diffusion model and put it in the correct place. Please check the config in `config/MaxEntIRL.json` or create your own config file (follow [this]() to get the details about config). 
 ```bash
-python -m scripts.train --config=config/MaxEntIRL.json
+python -m scripts.train --config <path-to-config-file>
+# For example, use our config file
+python -m scripts.train --config config/MaxEntIRL.json
 ```
 
 ### Closed-loop Evaluation
+You can use the following command to evaluate the trained model or our provided checkpoint. Please check the config in `config/MaxEntIRL.json` or create your own config file (follow [this]() to get the details about config). 
 ```bash
-python -m scripts.infer --config=config/MaxEntIRL.json
+python -m scripts.infer --config <path-to-config-file>
 ```
 
 ### Parse Metrics
+
 ```bash
-python scripts/calcalate_metrics.py --hdf5_dir=<path-to-hdf5-file> --dataset_dir=<path-to-dataset> --output_dir=<path-to-output-dir>
+python scripts/calcalate_metrics.py --hdf5_dir <path-to-hdf5-file> --dataset_dir <path-to-dataset> --output_dir <path-to-output-dir>
 ```
 
 
