@@ -20,7 +20,7 @@ DiffGAN is a novel generative adversarial diffusion framework that combines diff
 - Bridges the gap between discriminative learning (high realism) and generative learning (multimodal diversity).
 - Produces agent behaviors that are both human-like and diverse
 
-<a href="images/Diffgan.png">
+<a href="images/Diffgan.png?raw=true">
   <img src="images/Diffgan.png" width="100%">
 </a>
 
@@ -29,13 +29,13 @@ DiffGAN is a novel generative adversarial diffusion framework that combines diff
   <summary><strong>Simulation on nuScenes-Boston</strong></summary>
   <br>
   <p align="center">
-  <a href="images/b36.gif">
+  <a href="images/b36.gif?raw=true">
     <img src="images/b36.gif" width="100%">
   </a>
-  <a href="images/b74.gif">
+  <a href="images/b74.gif?raw=true">
     <img src="images/b74.gif" width="100%">
   </a>
-  <a href="images/b52.gif">
+  <a href="images/b52.gif?raw=true">
     <img src="images/b52.gif" width="100%">
   </a>
   </p>
@@ -44,13 +44,13 @@ DiffGAN is a novel generative adversarial diffusion framework that combines diff
   <summary><strong>Simulation on nuScenes-Singapore</strong></summary>
   <br>
   <p align="center">
-  <a href="images/s13.gif">
+  <a href="images/s13.gif?raw=true">
     <img src="images/s13.gif" width="100%">
   </a>
-  <a href="images/s30.gif">
+  <a href="images/s30.gif?raw=true">
     <img src="images/s30.gif" width="100%">
   </a>
-  <a href="images/s24.gif">
+  <a href="images/s24.gif?raw=true">
     <img src="images/s24.gif" width="100%">
   </a>
   </p>
