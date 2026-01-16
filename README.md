@@ -1,5 +1,8 @@
 <div align="center">
-  <h1>DiffGAN</h1>
+<a href="images/main.png">
+    <img src="images/main.png" width="100%">
+</a>
+
   <h3>GAN-Inspired Trajectory Generation by Inverse Reinforcement Learning-Informed Diffusion</h3>
 </div>
 
