@@ -144,7 +144,13 @@ python -m scripts.train --config config/MaxEntIRL.json
 ### Closed-loop Evaluation
 You can use the following command to evaluate the trained model or our provided [checkpoint](#pre-trained-models). Please check the config in `config/MaxEntIRL.json` or create your own config file (follow [this](config/README.md) to get the details about config). 
 ```bash
+# Add ffmpeg directly to PATH
+export PATH=<path-to-ffmpeg>
 python -m scripts.infer --config <path-to-config-file>
+
+# For example, use our config file
+export PATH=$HOME/DiffGan/ffmpeg-7.0.2-amd64-static:$PATH
+python -m scripts.infer --config config/MaxEntIRL.json
 ```
 
 ### Parse Metrics
