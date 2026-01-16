@@ -74,8 +74,8 @@ DiffGan/
 
 ## Getting Started
 ### Basic Installation (mainly based on tbsim)
-Create conda environment
 ```bash
+# Create conda environment
 conda create -n bg3.9 python=3.9
 conda activate bg3.9
 
