@@ -78,7 +78,7 @@ class FeatureExtractionConfig:
     checkpoint_frequency: int = 20  # Save every N iterations
     
     # Wandb configuration
-    use_wandb: bool = True
+    use_wandb: bool = False
     wandb_project: str = "adversarial-irl-diffusion"
     wandb_entity: str = "YOUR_USER_NAME"  # Your wandb username/team
     wandb_run_name: str = None  # Will be auto-generated if None
