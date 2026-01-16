@@ -5,11 +5,12 @@
         ["velocity_p2_t", "a_long_p2_t", "jerk_long_p2_t",                   "front_thw_p2_t", "left_thw_p2_t", "right_thw_p2_t",
          "velocity_p2_f", "a_long_p2_f", "jerk_long_p2_f", "a_lateral_p2_f", "front_thw_p2_f", "left_thw_p2_f", "right_thw_p2_f"],
   "continue_id": null,
-
-  "pkl_label": "basic",
+  "pkl_label": "best",
   "scene_location": "boston",
   "num_scenes_to_evaluate": 10,
   "num_scenes_to_infer": 100,
   "num_rollouts": 8,
-  "learning_rate": 0.0001
+  "learning_rate": 0.0001,
+  "use_wandb": false,
+  "wandb_entity": "YOUR_USER_NAME"
 }
