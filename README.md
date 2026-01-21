@@ -155,6 +155,10 @@ python -m scripts.infer --config <path-to-config-file>
 export PATH=$HOME/DiffGan/ffmpeg-7.0.2-amd64-static:$PATH
 python -m scripts.infer --config config/MaxEntIRL.json
 ```
+You can use the following command to create a gif with the style we have shown:
+```bash
+python generate_gif.py --hdf5 <path-to-hdf5> --output <output-file-name> --scene-idx <idx-in-hdf5>
+```
 
 ### Parse Metrics
 ```bash
