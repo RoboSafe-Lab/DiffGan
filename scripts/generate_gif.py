@@ -438,7 +438,7 @@ def generate_gif_from_hdf5(
 if __name__ == "__main__":
     """
     Tools to generate a GIF from hdf5.
-    python generate_gif.py --hdf5 <path-to-hdf5> --output <path-to-output> --scene-idx <idx-in-hdf5>
+    python generate_gif.py --hdf5 <path-to-hdf5> --output <output-file-name> --scene-idx <idx-in-hdf5>
     python generate_gif.py --hdf5 infer_results/boston/best/data.hdf5 --output out.gif --scene-idx 0
     """
     import argparse
