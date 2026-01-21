@@ -11,6 +11,7 @@
 - [Simulation Results](#simulation-results)
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
+- [License](#license)
 
 ## Methods
 DiffGAN is a novel generative adversarial diffusion framework that combines diffusion models with inverse reinforcement learning (IRL) for realistic and diverse agent behavior modeling in autonomous vehicle simulation.
@@ -168,7 +169,9 @@ python scripts/calcalate_metrics.py --hdf5_dir <path-to-hdf5-file> --dataset_dir
 ### Pre-trained Models
 We have provided checkpoints for discriminator in `\train_results`.
 
-
+## License
+This project is based on and partially derived from [CTG](https://github.com/NVlabs/CTG), which is released under the NVIDIA License.
+All modifications and additional code in this repository are also released under the NVIDIA License and are restricted to non-commercial research and evaluation purposes only.
 
 
 
