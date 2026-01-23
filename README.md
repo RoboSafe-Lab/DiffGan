@@ -169,6 +169,74 @@ python scripts/calcalate_metrics.py --hdf5_dir <path-to-hdf5-file> --dataset_dir
 ### Pre-trained Models
 We have provided checkpoints for discriminator in `\train_results`.
 
+### Hyperparameters
+<div align="center">
+<table>
+  <thead>
+    <tr>
+      <th rowspan="2">Hyperparameter</th>
+      <th colspan="2">nuScenes</th>
+      <th colspan="2">nuPlan</th>
+    </tr>
+    <tr>
+      <th>Boston</th>
+      <th>Singapore</th>
+      <th>Boston</th>
+      <th>Singapore</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Number of Training Episodes</td>
+      <td colspan="1" align="center">10</td>
+      <td colspan="1" align="center">21</td>
+      <td colspan="2" align="center">-</td>
+    </tr>
+    <tr>
+      <td>Number of Test Episodes</td>
+        <td colspan="1" align="center">67</td>
+        <td colspan="1" align="center">52</td>
+        <td colspan="1" align="center">100</td>
+        <td colspan="1" align="center">92</td>
+    </tr>
+    <tr>
+      <td>Training Iterations of Reward (ITER_N)</td>
+      <td colspan="2" align="center">100</td> <td colspan="2" align="center">-</td>
+    </tr>
+    <tr>
+      <td>IRL Sub-optimization Iterations (IRL_N)</td>
+      <td colspan="2" align="center">100</td> <td colspan="2" align="center">-</td>
+    </tr>
+    <tr>
+      <td>Number of Rollouts (M)</td>
+      <td colspan="2" align="center">8</td> <td colspan="2" align="center">-</td>
+    </tr>
+    <tr>
+      <td>Learning Rate</td>
+      <td colspan="2" align="center">0.0001</td> <td colspan="2" align="center">-</td>
+    </tr>
+    <tr>
+      <td>Planning Horizon</td>
+      <td colspan="4" align="center">50</td>
+    </tr>
+    <tr>
+      <td>History Sec.</td>
+      <td colspan="4" align="center">3.0</td>
+    </tr>
+    <tr>
+      <td>Future Sec.</td>
+      <td colspan="4" align="center">5.2</td>
+    </tr>
+    <tr>
+      <td>Step Time</td>
+      <td colspan="4" align="center">0.1</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+
+
 ## License
 This project is based on and partially derived from [CTG](https://github.com/NVlabs/CTG), which is released under the NVIDIA License.
 All modifications and additional code in this repository are also released under the NVIDIA License and are restricted to non-commercial research and evaluation purposes only.
