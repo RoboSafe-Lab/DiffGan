@@ -33,8 +33,8 @@ DiffGAN is a novel generative adversarial diffusion framework that combines diff
   <summary><strong>Simulation on nuScenes-Boston</strong></summary>
   <br>
   <p align="center">
-  <a href="images/b36.gif">
-    <img src="images/b36.gif" width="100%">
+  <a href="images/b40.gif">
+    <img src="images/b40.gif" width="100%">
   </a>
   <a href="images/b74.gif">
     <img src="images/b74.gif" width="100%">
